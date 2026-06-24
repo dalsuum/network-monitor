@@ -68,7 +68,24 @@
         <div class="bg-gray-800 rounded-xl p-6 border border-gray-700 shadow-lg">
             <h2 class="text-xl font-bold text-white mb-6">RF Parameters</h2>
 
-            <div class="mb-8 p-4 rounded-lg bg-gray-900 border border-gray-700">
+            <div class="mb-6 grid grid-cols-2 gap-2 rounded-lg bg-gray-900 border border-gray-700 p-1">
+                <button
+                    @click="setMode('live')"
+                    class="py-2 px-3 rounded text-sm font-semibold transition"
+                    :class="mode === 'live' ? 'bg-emerald-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'"
+                    type="button">
+                    Live
+                </button>
+                <button
+                    @click="setMode('manual')"
+                    class="py-2 px-3 rounded text-sm font-semibold transition"
+                    :class="mode === 'manual' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'"
+                    type="button">
+                    Manual
+                </button>
+            </div>
+
+            <div v-if="mode === 'live'" class="mb-8 p-4 rounded-lg bg-gray-900 border border-gray-700">
                 <div class="flex items-center justify-between gap-4 mb-4">
                     <div>
                         <h3 class="text-sm font-semibold text-gray-300">Live AP Data</h3>
@@ -189,6 +206,7 @@
         setup() {
             const signal = ref(-70)
             const noise = ref(-95)
+            const mode = ref('live')
             const liveDevices = ref([])
             const selectedDeviceId = ref('')
             const selectedLiveLinkPercent = ref(null)
@@ -202,11 +220,11 @@
             })
 
             const isMasterProfile = computed(() => {
-                return !selectedDeviceId.value && signal.value === -60 && noise.value === -95
+                return mode.value === 'manual' && signal.value === -60 && noise.value === -95
             })
 
             const ccq = computed(() => {
-                if (selectedLiveLinkPercent.value !== null) {
+                if (mode.value === 'live' && selectedLiveLinkPercent.value !== null) {
                     return Math.round(selectedLiveLinkPercent.value)
                 }
                 if (isMasterProfile.value) return 10
@@ -215,7 +233,7 @@
             })
 
             const ccqLabel = computed(() => {
-                return selectedLiveLinkPercent.value !== null ? 'Live Link Quality %' : 'Estimated CCQ %'
+                return mode.value === 'live' && selectedLiveLinkPercent.value !== null ? 'Live Link Quality %' : 'Estimated CCQ %'
             })
 
             const liveSourceLabel = computed(() => {
@@ -261,6 +279,7 @@
             })
 
             const loadStationProfile = () => {
+                mode.value = 'manual'
                 selectedDeviceId.value = ''
                 selectedLiveLinkPercent.value = null
                 selectedLiveSignal.value = null
@@ -270,6 +289,7 @@
             }
 
             const loadMasterProfile = () => {
+                mode.value = 'manual'
                 selectedDeviceId.value = ''
                 selectedLiveLinkPercent.value = null
                 selectedLiveSignal.value = null
@@ -320,6 +340,28 @@
                     : `Selected ${device.name}, but no parseable wireless data was found.`
             }
 
+            const setMode = (nextMode) => {
+                mode.value = nextMode
+                if (nextMode === 'manual') {
+                    selectedDeviceId.value = ''
+                    selectedLiveLinkPercent.value = null
+                    selectedLiveSignal.value = null
+                    selectedLiveLinkText.value = ''
+                    liveStatus.value = 'Manual mode selected.'
+                    return
+                }
+
+                if (!liveDevices.value.length) {
+                    fetchLiveDevices()
+                    return
+                }
+
+                if (!selectedDeviceId.value) {
+                    selectedDeviceId.value = String(liveDevices.value[0].id)
+                }
+                applySelectedDevice()
+            }
+
             const fetchLiveDevices = async () => {
                 try {
                     const response = await fetch('{{ url_for('api_status') }}', { credentials: 'same-origin' })
@@ -336,6 +378,10 @@
                     if (!liveDevices.value.length) {
                         selectedDeviceId.value = ''
                         applySelectedDevice()
+                        return
+                    }
+
+                    if (mode.value !== 'live') {
                         return
                     }
 
@@ -360,6 +406,7 @@
             return {
                 signal,
                 noise,
+                mode,
                 liveDevices,
                 selectedDeviceId,
                 selectedLiveLinkPercent,
@@ -375,6 +422,7 @@
                 snrPercent,
                 loadStationProfile,
                 loadMasterProfile,
+                setMode,
                 fetchLiveDevices,
                 applySelectedDevice,
                 liveSourceLabel,
