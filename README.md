@@ -95,25 +95,159 @@ To create a new user, you can modify the `create_default_user()` function in `ap
 
 ### Monitoring Interval
 
-The default monitoring interval is 10 seconds. To change this:
+The default monitoring interval is controlled by `.env`:
 
-Edit line 119 in `app.py`:
-```python
-time.sleep(10)  # Change to desired interval in seconds
+```env
+PING_INTERVAL=10
+PING_COUNT=3
+PING_TIMEOUT=2
 ```
+
+For a quieter 24/7 machine, `PING_INTERVAL=30` is a good starting point.
 
 ### History Retention
 
-By default, all history is retained indefinitely. To implement automatic cleanup:
+History retention is automatic. Set this in `.env`:
 
-Add this function to `app.py` and call it periodically:
-```python
-def cleanup_old_history(days=30):
-    """Delete history older than specified days"""
-    cutoff = datetime.utcnow() - timedelta(days=days)
-    DeviceHistory.query.filter(DeviceHistory.timestamp < cutoff).delete()
-    db.session.commit()
+```env
+HISTORY_RETENTION_DAYS=30
 ```
+
+The monitor prunes old `DeviceHistory` and `DeviceEvent` rows about once per hour while the server is running. Set `HISTORY_RETENTION_DAYS=0` only if you intentionally want to keep history forever.
+
+## Daily Operation
+
+### Start the App
+
+From the project folder:
+
+```powershell
+python app.py
+```
+
+Open:
+
+```text
+http://localhost:5002
+```
+
+If you want it to run hidden in the background on Windows:
+
+```powershell
+Start-Process -FilePath python -ArgumentList 'app.py' -WorkingDirectory '.'
+```
+
+### Stop the App
+
+If it is running in the same terminal, press:
+
+```text
+Ctrl+C
+```
+
+If it is running in the background on Windows, find the process using port `5002`:
+
+```powershell
+netstat -ano | findstr :5002
+```
+
+Then stop the listening process:
+
+```powershell
+taskkill /PID <PID> /F
+```
+
+PowerShell alternative:
+
+```powershell
+$pid = (Get-NetTCPConnection -LocalPort 5002 -State Listen).OwningProcess
+Stop-Process -Id $pid -Force
+```
+
+### Restart the App
+
+Stop it first, then start it again:
+
+```powershell
+python app.py
+```
+
+Restart after changing `.env`, retention settings, AP credentials, or Python code.
+
+### Manual Cleanup
+
+Automatic cleanup handles old history based on `HISTORY_RETENTION_DAYS`, but you can also clean manually from the UI:
+
+- **Admin -> Clear by range**: deletes history records between selected dates.
+- **Admin -> Clear all history**: deletes all status history records.
+- Tick **Backup to CSV** before deleting if you need an audit copy.
+- **Reports -> Clear Reports**: deletes AP anomaly report records.
+- Tick **Backup CSV** on Reports before clearing if needed.
+
+Manual cleanup does not delete devices. It only clears historical records/reports.
+
+## Wireless AP Signal Guide
+
+AP wireless metrics are collected over SSH for AP-type devices when `AP_USERNAME` and `AP_PASSWORD` are set in `.env`. The dashboard Wireless column may show values like:
+
+```text
+Sig: -57 dBm | Link: 98/100
+```
+
+### Signal Strength (`dBm`)
+
+Signal is negative. Closer to zero is better.
+
+| Signal | Meaning |
+| --- | --- |
+| `-50 dBm` or better | Excellent |
+| `-51` to `-60 dBm` | Very good |
+| `-61` to `-70 dBm` | Usable/good |
+| `-71` to `-75 dBm` | Weak, watch closely |
+| Worse than `-75 dBm` | Poor; app creates a Low Signal report |
+
+### Link Quality
+
+`Link: 98/100` means 98 percent link quality. Higher is better.
+
+| Link Quality | Meaning |
+| --- | --- |
+| `80/100` or higher | Good |
+| `50/100` to `79/100` | Warning/interference possible |
+| Below `50/100` | Poor; app creates a Poor Link Quality report |
+
+### Noise and SNR
+
+Noise floor is also negative. More negative is better. SNR is:
+
+```text
+SNR = signal - noise
+```
+
+Example:
+
+```text
+signal -60 dBm, noise -95 dBm -> SNR 35 dB
+```
+
+| SNR | Meaning |
+| --- | --- |
+| `30 dB+` | Excellent |
+| `20` to `29 dB` | Good |
+| `10` to `19 dB` | Weak/unstable |
+| Below `10 dB` | Poor |
+
+### Simulator
+
+The **Simulator** page is an offline calculator, not live monitoring. Use it to understand wireless behavior:
+
+1. Open **Simulator** from the navigation.
+2. Move **Signal Strength** and **Noise Floor** sliders.
+3. Watch calculated **SNR** and estimated **CCQ**.
+4. Use **Load Station Profile** for a healthy example.
+5. Use **Load Master Profile** for a poor/asymmetric example.
+
+Use Simulator for learning and troubleshooting logic. Use Dashboard, History, Device Detail, and Reports for real device records.
 
 ## Technical Architecture
 

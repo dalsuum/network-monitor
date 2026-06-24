@@ -735,7 +735,7 @@ def export_submit():
 monitoring_active = True
 
 # History auto-prune: delete records older than this many days
-HISTORY_RETENTION_DAYS = int(os.environ.get('HISTORY_RETENTION_DAYS', 90))
+HISTORY_RETENTION_DAYS = int(os.environ.get('HISTORY_RETENTION_DAYS', 30))
 PING_INTERVAL_SECONDS = int(os.environ.get('PING_INTERVAL', 10))
 PING_COUNT = int(os.environ.get('PING_COUNT', 3))
 PING_TIMEOUT_SECONDS = int(os.environ.get('PING_TIMEOUT', 2))
@@ -780,19 +780,28 @@ def record_status_change(device, new_status, latency, now_utc, last_histories):
 
 
 def _prune_old_history():
-    """Delete history records older than HISTORY_RETENTION_DAYS."""
+    """Delete monitoring records older than HISTORY_RETENTION_DAYS."""
     if HISTORY_RETENTION_DAYS <= 0:
         return
     cutoff = datetime.now(timezone.utc) - timedelta(days=HISTORY_RETENTION_DAYS)
     cutoff_naive = cutoff.replace(tzinfo=None)
-    deleted = (
+    deleted_history = (
         db.session.query(DeviceHistory)
         .filter(DeviceHistory.timestamp < cutoff_naive)
         .delete()
     )
+    deleted_events = (
+        db.session.query(DeviceEvent)
+        .filter(DeviceEvent.timestamp < cutoff_naive)
+        .delete()
+    )
+    deleted = deleted_history + deleted_events
     if deleted:
         db.session.commit()
-        logger.info(f'Auto-pruned {deleted} history records older than {HISTORY_RETENTION_DAYS} days.')
+        logger.info(
+            f'Auto-pruned {deleted_history} history records and '
+            f'{deleted_events} device events older than {HISTORY_RETENTION_DAYS} days.'
+        )
 
 
 def get_latest_histories(device_ids):
