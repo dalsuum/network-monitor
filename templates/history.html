@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+
+{% block title %}History - Network Monitor{% endblock %}
+
+{% block extra_head %}
+<style>
+    .page-header {
+        margin-bottom: 32px;
+    }
+
+    .page-title {
+        font-size: 32px;
+        font-weight: 700;
+        margin-bottom: 8px;
+    }
+
+    .page-subtitle {
+        font-size: 16px;
+        color: var(--text-dim);
+    }
+
+    .filters {
+        background: var(--surface-soft);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 24px;
+        margin-bottom: 24px;
+        display: flex;
+        gap: 16px;
+        align-items: end;
+        flex-wrap: wrap;
+    }
+
+    .filter-field {
+        flex: 1;
+        min-width: 200px;
+    }
+
+    .filter-field label {
+        display: block;
+        font-size: 11px;
+        color: var(--text-dim);
+        margin-bottom: 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        font-family: 'JetBrains Mono', monospace;
+    }
+
+    .filter-field select {
+        width: 100%;
+        padding: 10px 12px;
+        background: var(--input-bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--text);
+        font-size: 14px;
+        font-family: 'Outfit', sans-serif;
+    }
+
+    .filter-field select:focus {
+        outline: none;
+        border-color: var(--primary);
+    }
+</style>
+{% endblock %}
+
+{% block flash_messages %}{% endblock %}
+
+{% block content %}
+    <div class="container">
+        <div class="page-header">
+            <h1 class="page-title">Network History</h1>
+            <p class="page-subtitle">View status changes and incidents across your network</p>
+        </div>
+
+        <form method="GET" action="{{ url_for('history') }}" class="filters">
+            <div class="filter-field">
+                <label>Device</label>
+                <select name="device_id">
+                    <option value="">All Devices</option>
+                    {% for device in devices %}
+                        <option value="{{ device.id }}" {% if selected_device == device.id %}selected{% endif %}>
+                            {{ device.name }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="filter-field">
+                <label>Time Period</label>
+                <select name="hours">
+                    <option value="1" {% if selected_hours == 1 %}selected{% endif %}>Last Hour</option>
+                    <option value="6" {% if selected_hours == 6 %}selected{% endif %}>Last 6 Hours</option>
+                    <option value="24" {% if selected_hours == 24 %}selected{% endif %}>Last 24 Hours</option>
+                    <option value="168" {% if selected_hours == 168 %}selected{% endif %}>Last 7 Days</option>
+                    <option value="720" {% if selected_hours == 720 %}selected{% endif %}>Last 30 Days</option>
+                </select>
+            </div>
+
+            <button type="submit" class="btn-filter">Apply Filters</button>
+        </form>
+
+        <div class="section">
+            {% if history %}
+                <div class="result-count">
+                    Showing {{ history|length }} record(s)
+                </div>
+
+                <table class="history-table">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Device</th>
+                            <th>IP Address</th>
+                            <th>Status</th>
+                            <th>Latency</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for record in history %}
+                        <tr>
+                            <td class="timestamp">{{ record.timestamp|format_dt('%Y-%m-%d %H:%M:%S') }}</td>
+                            <td>
+                                <a href="{{ url_for('device_detail', device_id=record.device.id) }}" class="device-link">
+                                    {{ record.device.name }}
+                                </a>
+                            </td>
+                            <td class="timestamp">{{ record.device.ip_address }}</td>
+                            <td>
+                                <span class="status-badge {{ record.status.lower() }}">
+                                    <span class="status-dot"></span>
+                                    {{ record.status }}
+                                </span>
+                            </td>
+                            <td class="latency">{{ "%.2f"|format(record.latency) }} ms</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <div class="empty-state">
+                    <div class="empty-state-icon">📊</div>
+                    <p>No history records found for the selected filters.</p>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+{% endblock %}

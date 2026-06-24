@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block title %}Confirm Deletion - Network Monitor{% endblock %}
+
+{% block navbar %}{% endblock %}
+{% block flash_messages %}{% endblock %}
+
+{% block content %}
+    <div class="container" style="max-width: 720px; margin-top: 48px;">
+        <div class="card" style="border-radius: 18px;">
+            <h1 style="margin-top: 0; font-size: 30px;">Confirm Deletion</h1>
+            <button class="theme-toggle" type="button" id="themeToggle" onclick="toggleTheme()">Light Mode</button>
+            <p style="line-height: 1.7; color: var(--text-dim);">About to delete <strong>{{ count }}</strong> history records. This action is irreversible.</p>
+            <form method="post" action="{{ url_for('admin_clear_history') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="action" value="{{ action }}">
+                <input type="hidden" name="confirm" value="1">
+                {% if start %}<input type="hidden" name="start" value="{{ start }}">{% endif %}
+                {% if end %}<input type="hidden" name="end" value="{{ end }}">{% endif %}
+                <div style="display: flex; flex-wrap: wrap; gap: 16px; margin-top: 24px;">
+                    <button type="submit" class="btn btn-danger">Confirm Delete</button>
+                    <a class="btn btn-secondary" href="{{ url_for('admin_history_manage') }}">Cancel</a>
+                </div>
+            </form>
+        </div>
+    </div>
+{% endblock %}

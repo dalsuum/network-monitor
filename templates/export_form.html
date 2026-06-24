@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Export Report{% endblock %}
+
+{% block navbar %}{% endblock %}
+{% block flash_messages %}{% endblock %}
+
+{% block content %}
+<div style="padding: 40px;">
+    <div class="card" style="max-width: 480px; margin: 40px auto; padding: 20px; border-radius: 8px;">
+        <h2>Export Report</h2>
+        <button class="theme-toggle" type="button" id="themeToggle" onclick="toggleTheme()">Light Mode</button>
+        <p style="color:var(--text-dim)">Choose dataset and format, then click Export.</p>
+        <form method="get" action="{{ url_for('export_submit') }}">
+            <div style="display:flex; gap:8px; margin-bottom:12px;">
+                <label><input type="radio" name="what" value="devices" checked> Devices</label>
+                <label><input type="radio" name="what" value="history"> History</label>
+                <label><input type="radio" name="what" value="reports"> Reports</label>
+            </div>
+            <div style="display:flex; gap:8px; margin-bottom:12px;">
+                <label><input type="radio" name="fmt" value="xlsx" checked> XLSX</label>
+                <label><input type="radio" name="fmt" value="pdf"> PDF</label>
+            </div>
+            <div style="text-align:right;">
+                <a class="btn btn-ghost" href="{{ url_for('dashboard') }}">Cancel</a>
+                <button class="btn btn-primary" type="submit">Export</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

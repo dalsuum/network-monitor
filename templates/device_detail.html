@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+
+{% block title %}{{ device.name }} - Network Monitor{% endblock %}
+
+{% block extra_head %}
+<style>
+    .device-header {
+        background: var(--surface-soft);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 32px;
+        margin-bottom: 24px;
+        backdrop-filter: blur(10px);
+    }
+
+    .device-title {
+        font-size: 32px;
+        font-weight: 700;
+        margin-bottom: 16px;
+    }
+
+    .device-meta {
+        display: flex;
+        gap: 32px;
+        flex-wrap: wrap;
+    }
+
+    .meta-item {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .meta-label {
+        font-size: 11px;
+        color: var(--text-dim);
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        font-family: 'JetBrains Mono', monospace;
+    }
+
+    .meta-value {
+        font-size: 16px;
+        font-weight: 600;
+        font-family: 'JetBrains Mono', monospace;
+    }
+
+    .device-detail .status-badge {
+        padding: 8px 16px;
+        border-radius: 8px;
+        font-size: 14px;
+    }
+
+    .device-detail .status-dot {
+        width: 10px;
+        height: 10px;
+    }
+
+    .device-detail .status-badge.online .status-dot {
+        box-shadow: 0 0 12px var(--success);
+    }
+</style>
+{% endblock %}
+
+{% block flash_messages %}{% endblock %}
+
+{% block content %}
+    <div class="container device-detail">
+        <div class="breadcrumb">
+            <a href="{{ url_for('dashboard') }}">Dashboard</a> / {{ device.name }}
+        </div>
+
+        <div class="device-header">
+            <h1 class="device-title">{{ device.name }}</h1>
+            <div class="device-meta">
+                <div class="meta-item">
+                    <div class="meta-label">IP Address</div>
+                    <div class="meta-value">{{ device.ip_address }}</div>
+                </div>
+                <div class="meta-item">
+                    <div class="meta-label">Type</div>
+                    <div class="meta-value">{{ device.device_type }}</div>
+                </div>
+                <div class="meta-item">
+                    <div class="meta-label">Zone</div>
+                    <div class="meta-value">{{ device.zone or 'No Zone' }}</div>
+                </div>
+                <div class="meta-item">
+                    <div class="meta-label">Location</div>
+                    <div class="meta-value">{{ device.location or 'Not specified' }}</div>
+                </div>
+                <div class="meta-item">
+                    <div class="meta-label">Current Status</div>
+                    <div class="meta-value">
+                        <span class="status-badge {{ device.last_status.lower() }}">
+                            <span class="status-dot"></span>
+                            {{ device.last_status }}
+                        </span>
+                    </div>
+                </div>
+                <div class="meta-item">
+                    <div class="meta-label">Monitoring</div>
+                    <div class="meta-value">{{ 'Active' if device.is_monitored else 'Paused' }}</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">7-Day Uptime</div>
+                <div class="stat-value" style="color: var(--success)">{{ uptime_percent }}%</div>
+                <div class="uptime-bar">
+                    <div class="uptime-fill" style="width: {{ uptime_percent }}%"></div>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-label">Current Latency</div>
+                <div class="stat-value" style="font-size: 28px;">{{ "%.2f"|format(device.latency) }} ms</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-label">Last Check</div>
+                <div class="stat-value" style="font-size: 16px; font-family: 'JetBrains Mono', monospace;">
+                    {{ device.last_check|format_dt('%H:%M:%S') if device.last_check else 'Never' }}
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2 class="section-title">Status History (Last 7 Days)</h2>
+
+            {% if history %}
+                <table class="history-table">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Status</th>
+                            <th>Latency</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for record in history %}
+                        <tr>
+                            <td class="timestamp">{{ record.timestamp|format_dt('%Y-%m-%d %H:%M:%S') }}</td>
+                            <td>
+                                <span class="status-change {{ record.status.lower() }}">
+                                    {{ record.status }}
+                                </span>
+                            </td>
+                            <td class="timestamp">{{ "%.2f"|format(record.latency) }} ms</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <div class="empty-state">
+                    <p>No history available yet. Status checks will appear here.</p>
+                </div>
+            {% endif %}
+        </div>
+
+        <a href="{{ url_for('dashboard') }}" class="btn-back">← Back to Dashboard</a>
+        <div class="section">
+            <h2 class="section-title">Device Events (Last 7 Days)</h2>
+
+            {% if events %}
+                <table class="history-table">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Type</th>
+                            <th>Severity</th>
+                            <th>Latency</th>
+                            <th>Payload</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for event in events %}
+                        <tr>
+                            <td class="timestamp">{{ event.timestamp|format_dt('%Y-%m-%d %H:%M:%S') }}</td>
+                            <td>{{ event.event_type }}</td>
+                            <td>
+                                <span class="status-change {{ 'offline' if event.severity == 'down' else 'online' }}">
+                                    {{ event.severity }}
+                                </span>
+                            </td>
+                            <td class="timestamp">
+                                {{ "%.2f"|format(event.latency_ms) ~ ' ms' if event.latency_ms is not none else '-' }}
+                            </td>
+                            <td>{{ event.raw_payload or '-' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <div class="empty-state">
+                    <p>No device events recorded yet.</p>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+{% endblock %}

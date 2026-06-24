@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+
+{% block title %}Incident Reports - Network Monitor{% endblock %}
+
+{% block extra_head %}
+<style>
+    .page-header {
+        margin-bottom: 32px;
+    }
+
+    .page-title {
+        font-size: 32px;
+        font-weight: 700;
+        margin-bottom: 8px;
+    }
+
+    .page-subtitle {
+        font-size: 16px;
+        color: var(--text-dim);
+    }
+
+    .report-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+        margin-top: 18px;
+    }
+
+    .inline-form {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
+    .inline-form label {
+        color: var(--text-dim);
+        font-size: 13px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+</style>
+{% endblock %}
+
+{% block flash_messages %}{% endblock %}
+
+{% block content %}
+    <div class="container">
+        <div class="page-header">
+            <h1 class="page-title">Automatic Incident Reports</h1>
+            <p class="page-subtitle">Real AP anomaly records detected from SSH wireless metrics.</p>
+            <div class="report-actions">
+                <a class="btn btn-secondary" href="{{ url_for('export_report', what='reports', fmt='xlsx') }}">Export XLSX</a>
+                <a class="btn btn-secondary" href="{{ url_for('export_report', what='reports', fmt='pdf') }}">Export PDF</a>
+                {% if current_user.is_authenticated and current_user.is_admin %}
+                <form class="inline-form" method="post" action="{{ url_for('admin_clear_reports') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <label><input type="checkbox" name="backup" value="1"> Backup CSV</label>
+                    <button class="btn btn-danger" type="submit" onclick="return confirm('Clear all incident reports?')">Clear Reports</button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="section">
+            {% if incidents %}
+                <div class="result-count" style="margin-bottom: 16px;">
+                    Showing {{ incidents|length }} report(s)
+                </div>
+
+                <table class="history-table" style="width: 100%; text-align: left; border-collapse: collapse;">
+                    <thead>
+                        <tr>
+                            <th style="padding: 12px; border-bottom: 1px solid var(--border);">Date / Time</th>
+                            <th style="padding: 12px; border-bottom: 1px solid var(--border);">Device</th>
+                            <th style="padding: 12px; border-bottom: 1px solid var(--border);">Issue Type</th>
+                            <th style="padding: 12px; border-bottom: 1px solid var(--border);">Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for incident in incidents %}
+                        <tr>
+                            <td class="timestamp" style="padding: 12px; border-bottom: 1px solid var(--border);">{{ incident.timestamp|format_dt('%Y-%m-%d %H:%M:%S') }}</td>
+                            <td style="padding: 12px; border-bottom: 1px solid var(--border);">
+                                <a href="{{ url_for('device_detail', device_id=incident.device.id) }}" class="device-link">
+                                    {{ incident.device.name }}
+                                </a>
+                            </td>
+                            <td style="padding: 12px; border-bottom: 1px solid var(--border);">
+                                <span class="status-badge" style="color: var(--danger); background: rgba(255, 51, 102, 0.1); padding: 4px 8px; border-radius: 4px; display: inline-flex; align-items: center; gap: 6px;">
+                                    <span class="status-dot" style="background: var(--danger); width: 8px; height: 8px; border-radius: 50%; display: inline-block;"></span>
+                                    {{ incident.issue_type }}
+                                </span>
+                            </td>
+                            <td style="padding: 12px; border-bottom: 1px solid var(--border);">{{ incident.details }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <div class="empty-state">
+                    <div class="empty-state-icon" style="font-size: 48px; margin-bottom: 16px;">✅</div>
+                    <p>No incidents detected yet. Everything is looking good!</p>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+{% endblock %}

@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block title %}Manage History - Network Monitor{% endblock %}
+
+{% block extra_head %}
+<style>
+    .container { max-width: 1000px; }
+    h1 { margin-bottom: 12px; font-size: 30px; }
+    p { color: var(--text-dim); line-height: 1.7; }
+    .admin-section { margin-bottom: 24px; }
+    .form-group { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+    .form-group label { color: var(--text-dim); font-size: 14px; display: flex; align-items: center; gap: 8px; }
+    .form-group input[type=datetime-local] { background: var(--input-bg); border: 1px solid var(--border); color: var(--text); padding: 10px 12px; border-radius: 10px; }
+    .form-group input[type=text],
+    .form-group input[type=password] { background: var(--input-bg); border: 1px solid var(--border); color: var(--text); padding: 10px 12px; border-radius: 10px; }
+    .form-group input[type=checkbox] { width: auto; }
+    .footer { margin-top: 16px; color: var(--text-dim); font-size: 13px; }
+</style>
+{% endblock %}
+
+{% block flash_messages %}{% endblock %}
+
+{% block content %}
+    <div class="container">
+        <div class="card">
+            <h1>Manage History</h1>
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+            <p>Use the controls below to clear device history. You can back up data to CSV before deletion for auditing.</p>
+            <div class="admin-section">
+                <h2>Clear by range</h2>
+                <form method="post" action="{{ url_for('admin_clear_history') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="form-group">
+                        <label>Start: <input type="datetime-local" name="start"></label>
+                        <label>End: <input type="datetime-local" name="end"></label>
+                        <label><input type="checkbox" name="backup" value="1"> Backup to CSV</label>
+                        <button type="submit" class="btn btn-primary" name="action" value="clear_range">Clear Range</button>
+                    </div>
+                </form>
+            </div>
+            <div class="admin-section">
+                <h2>Clear all history</h2>
+                <p>This will remove every history record in the database.</p>
+                <form method="post" action="{{ url_for('admin_clear_history') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="form-group">
+                        <label><input type="checkbox" name="backup" value="1"> Backup to CSV</label>
+                        <button type="submit" class="btn btn-danger" name="action" value="clear_all">Clear All</button>
+                    </div>
+                </form>
+            </div>
+            <div class="admin-section">
+                <h2>Reset User Password</h2>
+                <p>Reset the password for a user account. This is useful when the admin needs to recover or rotate credentials.</p>
+                <form method="post" action="{{ url_for('admin_reset_password') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="form-group">
+                        <label>Username: <input type="text" name="username" value="admin" required></label>
+                        <label>New Password: <input type="password" name="password" required></label>
+                        <label>Confirm Password: <input type="password" name="confirm_password" required></label>
+                        <button type="submit" class="btn btn-primary">Reset Password</button>
+                    </div>
+                </form>
+            </div>
+            <div class="footer">Note: time range values are interpreted in the configured app time zone.</div>
+        </div>
+    </div>
+{% endblock %}

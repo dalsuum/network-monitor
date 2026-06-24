@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Network Monitor{% endblock %}</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Outfit:wght@300;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    {% block navbar %}
+    <nav class="navbar">
+        <div class="logo">
+            <div class="logo-icon">N</div>
+            <div class="logo-text">Network Monitor</div>
+        </div>
+        <div class="nav-links">
+            <a href="{{ url_for('dashboard') }}" {% if request.endpoint == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
+            <a href="{{ url_for('reports') }}" {% if request.endpoint == 'reports' %}class="active"{% endif %}>Reports</a>
+            <a href="{{ url_for('simulator') }}" {% if request.endpoint == 'simulator' %}class="active"{% endif %}>Simulator</a>
+            <a href="{{ url_for('history') }}" {% if request.endpoint == 'history' %}class="active"{% endif %}>History</a>
+            {% if current_user.is_authenticated and current_user.is_admin %}
+                <a href="{{ url_for('admin_history_manage') }}" {% if request.endpoint == 'admin_history_manage' %}class="active"{% endif %}>Admin</a>
+            {% endif %}
+            <button id="themeToggle" type="button" onclick="toggleTheme()">Light Mode</button>
+            <a href="{{ url_for('logout') }}" class="btn-logout">Logout</a>
+        </div>
+    </nav>
+    {% endblock %}
+
+    {% block flash_messages %}
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+    </div>
+    {% endblock %}
+
+    {% block content %}{% endblock %}
+
+    <script src="{{ url_for('static', filename='theme.js') }}"></script>
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>
