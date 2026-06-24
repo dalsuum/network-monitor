@@ -50,7 +50,7 @@
 <div class="container simulator-container mt-8" id="app">
     <div class="page-header mb-8">
         <h1 class="text-3xl font-bold text-white mb-2">Wireless Link Quality Simulator</h1>
-        <p class="text-gray-400">Offline calculator for RF what-if testing. It does not read live device data.</p>
+        <p class="text-gray-400">Use manual RF what-if testing, or load the latest AP signal/link data from the monitoring database.</p>
     </div>
 
     <!-- Warning Banner (Edge Case) -->
@@ -67,6 +67,39 @@
         <!-- Controls Panel -->
         <div class="bg-gray-800 rounded-xl p-6 border border-gray-700 shadow-lg">
             <h2 class="text-xl font-bold text-white mb-6">RF Parameters</h2>
+
+            <div class="mb-8 p-4 rounded-lg bg-gray-900 border border-gray-700">
+                <div class="flex items-center justify-between gap-4 mb-4">
+                    <div>
+                        <h3 class="text-sm font-semibold text-gray-300">Live AP Data</h3>
+                        <p class="text-xs text-gray-500 mt-1">Uses the latest dashboard wireless values saved in the database.</p>
+                    </div>
+                    <button @click="fetchLiveDevices" class="py-2 px-3 bg-gray-700 hover:bg-gray-600 text-white rounded text-xs font-semibold transition">
+                        Refresh
+                    </button>
+                </div>
+
+                <select v-model="selectedDeviceId" @change="applySelectedDevice" class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-white mb-3">
+                    <option value="">Manual mode</option>
+                    <option v-for="device in liveDevices" :key="device.id" :value="String(device.id)" v-text="device.name + ' - ' + device.wireless_info"></option>
+                </select>
+
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                    <div class="bg-gray-800 rounded p-3 border border-gray-700">
+                        <div class="text-gray-500 mb-1">Source</div>
+                        <div class="font-semibold text-white" v-text="liveSourceLabel"></div>
+                    </div>
+                    <div class="bg-gray-800 rounded p-3 border border-gray-700">
+                        <div class="text-gray-500 mb-1">Live Signal</div>
+                        <div class="font-mono font-semibold text-blue-400" v-text="liveSignalLabel"></div>
+                    </div>
+                    <div class="bg-gray-800 rounded p-3 border border-gray-700">
+                        <div class="text-gray-500 mb-1">Live Link</div>
+                        <div class="font-mono font-semibold text-emerald-400" v-text="liveLinkLabel"></div>
+                    </div>
+                </div>
+                <p class="text-xs text-gray-500 mt-3" v-text="liveStatus"></p>
+            </div>
             
             <div class="mb-8">
                 <div class="flex justify-between mb-2">
@@ -141,7 +174,7 @@
 
             <!-- CCQ Metric -->
             <div class="mt-auto bg-gray-900 rounded-lg p-6 border border-gray-700 text-center">
-                <h3 class="text-gray-400 text-sm font-semibold mb-2">Estimated CCQ %</h3>
+                <h3 class="text-gray-400 text-sm font-semibold mb-2" v-text="ccqLabel"></h3>
                 <div class="text-5xl font-bold font-mono" :class="ccqColorClass" v-text="ccq + '%'"></div>
             </div>
 
@@ -150,25 +183,52 @@
 </div>
 
 <script>
-    const { createApp, ref, computed } = Vue
+    const { createApp, ref, computed, onMounted, onBeforeUnmount } = Vue
 
     createApp({
         setup() {
             const signal = ref(-70)
             const noise = ref(-95)
+            const liveDevices = ref([])
+            const selectedDeviceId = ref('')
+            const selectedLiveLinkPercent = ref(null)
+            const selectedLiveSignal = ref(null)
+            const selectedLiveLinkText = ref('')
+            const liveStatus = ref('Live AP data has not been loaded yet.')
+            let liveTimer = null
 
             const snr = computed(() => {
                 return signal.value - noise.value
             })
 
             const isMasterProfile = computed(() => {
-                return signal.value === -60 && noise.value === -95
+                return !selectedDeviceId.value && signal.value === -60 && noise.value === -95
             })
 
             const ccq = computed(() => {
+                if (selectedLiveLinkPercent.value !== null) {
+                    return Math.round(selectedLiveLinkPercent.value)
+                }
                 if (isMasterProfile.value) return 10
                 const calculated = Math.round((snr.value / 30) * 100)
                 return Math.min(100, Math.max(0, calculated))
+            })
+
+            const ccqLabel = computed(() => {
+                return selectedLiveLinkPercent.value !== null ? 'Live Link Quality %' : 'Estimated CCQ %'
+            })
+
+            const liveSourceLabel = computed(() => {
+                const device = liveDevices.value.find(d => String(d.id) === selectedDeviceId.value)
+                return device ? device.name : 'Manual'
+            })
+
+            const liveSignalLabel = computed(() => {
+                return selectedLiveSignal.value !== null ? selectedLiveSignal.value + ' dBm' : '-'
+            })
+
+            const liveLinkLabel = computed(() => {
+                return selectedLiveLinkText.value || '-'
             })
 
             const snrColorClass = computed(() => {
@@ -201,20 +261,112 @@
             })
 
             const loadStationProfile = () => {
+                selectedDeviceId.value = ''
+                selectedLiveLinkPercent.value = null
+                selectedLiveSignal.value = null
+                selectedLiveLinkText.value = ''
                 signal.value = -50
                 noise.value = -95
             }
 
             const loadMasterProfile = () => {
+                selectedDeviceId.value = ''
+                selectedLiveLinkPercent.value = null
+                selectedLiveSignal.value = null
+                selectedLiveLinkText.value = ''
                 signal.value = -60
                 noise.value = -95
             }
 
+            const parseWirelessInfo = (info) => {
+                const signalMatch = String(info || '').match(/Sig:\s*(-?\d+)\s*dBm/i)
+                const linkMatch = String(info || '').match(/Link:\s*(\d+)\s*\/\s*(\d+)/i)
+                const parsed = {
+                    signal: signalMatch ? Number(signalMatch[1]) : null,
+                    linkText: linkMatch ? `${linkMatch[1]}/${linkMatch[2]}` : '',
+                    linkPercent: null
+                }
+                if (linkMatch) {
+                    const numerator = Number(linkMatch[1])
+                    const denominator = Number(linkMatch[2])
+                    if (denominator > 0) {
+                        parsed.linkPercent = Math.max(0, Math.min(100, (numerator / denominator) * 100))
+                    }
+                }
+                return parsed
+            }
+
+            const applySelectedDevice = () => {
+                const device = liveDevices.value.find(d => String(d.id) === selectedDeviceId.value)
+                if (!device) {
+                    selectedLiveLinkPercent.value = null
+                    selectedLiveSignal.value = null
+                    selectedLiveLinkText.value = ''
+                    liveStatus.value = liveDevices.value.length ? 'Manual mode selected.' : 'No AP wireless data is available yet.'
+                    return
+                }
+
+                const parsed = parseWirelessInfo(device.wireless_info)
+                selectedLiveSignal.value = parsed.signal
+                selectedLiveLinkPercent.value = parsed.linkPercent
+                selectedLiveLinkText.value = parsed.linkText
+
+                if (parsed.signal !== null) {
+                    signal.value = parsed.signal
+                }
+
+                liveStatus.value = parsed.signal !== null || parsed.linkPercent !== null
+                    ? `Loaded latest data from ${device.name}. Noise remains manual because it is not stored yet.`
+                    : `Selected ${device.name}, but no parseable wireless data was found.`
+            }
+
+            const fetchLiveDevices = async () => {
+                try {
+                    const response = await fetch('{{ url_for('api_status') }}', { credentials: 'same-origin' })
+                    if (!response.ok) {
+                        liveStatus.value = 'Could not load live AP data. Login may have expired.'
+                        return
+                    }
+                    const payload = await response.json()
+                    liveDevices.value = (payload.devices || []).filter(device => {
+                        const type = String(device.device_type || '').toLowerCase()
+                        return (type.includes('ap') || device.wireless_info) && device.wireless_info
+                    })
+
+                    if (!liveDevices.value.length) {
+                        selectedDeviceId.value = ''
+                        applySelectedDevice()
+                        return
+                    }
+
+                    if (!selectedDeviceId.value || !liveDevices.value.some(d => String(d.id) === selectedDeviceId.value)) {
+                        selectedDeviceId.value = String(liveDevices.value[0].id)
+                    }
+                    applySelectedDevice()
+                } catch (error) {
+                    liveStatus.value = 'Live AP data request failed.'
+                }
+            }
+
+            onMounted(() => {
+                fetchLiveDevices()
+                liveTimer = setInterval(fetchLiveDevices, 10000)
+            })
+
+            onBeforeUnmount(() => {
+                if (liveTimer) clearInterval(liveTimer)
+            })
+
             return {
                 signal,
                 noise,
+                liveDevices,
+                selectedDeviceId,
+                selectedLiveLinkPercent,
+                liveStatus,
                 snr,
                 ccq,
+                ccqLabel,
                 isMasterProfile,
                 snrColorClass,
                 ccqColorClass,
@@ -222,7 +374,12 @@
                 noisePercent,
                 snrPercent,
                 loadStationProfile,
-                loadMasterProfile
+                loadMasterProfile,
+                fetchLiveDevices,
+                applySelectedDevice,
+                liveSourceLabel,
+                liveSignalLabel,
+                liveLinkLabel
             }
         }
     }).mount('#app')

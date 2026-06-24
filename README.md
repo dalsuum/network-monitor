@@ -239,15 +239,21 @@ signal -60 dBm, noise -95 dBm -> SNR 35 dB
 
 ### Simulator
 
-The **Simulator** page is an offline calculator, not live monitoring. Use it to understand wireless behavior:
+The **Simulator** page can work in two modes:
+
+- **Live AP data**: loads the latest AP `Signal` and `Link Quality` values from the monitoring database.
+- **Manual mode**: lets you move the signal/noise sliders for RF what-if testing.
+
+Noise floor is still manual because the current AP parser stores signal and link quality, but not noise floor.
 
 1. Open **Simulator** from the navigation.
-2. Move **Signal Strength** and **Noise Floor** sliders.
-3. Watch calculated **SNR** and estimated **CCQ**.
-4. Use **Load Station Profile** for a healthy example.
-5. Use **Load Master Profile** for a poor/asymmetric example.
+2. Pick an AP from **Live AP Data** if wireless metrics are available.
+3. The signal slider updates from the database.
+4. Link quality becomes the live CCQ-style value.
+5. Adjust **Noise Floor** manually to understand SNR impact.
+6. Use **Load Station Profile** and **Load Master Profile** for manual examples.
 
-Use Simulator for learning and troubleshooting logic. Use Dashboard, History, Device Detail, and Reports for real device records.
+Use Dashboard, History, Device Detail, and Reports for audit records. Use Simulator to interpret live AP values and test wireless scenarios.
 
 ## Technical Architecture
 
