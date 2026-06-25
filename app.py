@@ -2,6 +2,7 @@ import os
 import re
 import io
 import csv
+import json
 import time
 import click
 import logging
@@ -14,6 +15,14 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 import paramiko
+
+from wireless_health import WirelessHealthEngine
+from wireless_health.vendors.ligowave import parse_ssh_output as ligowave_parse
+from wireless_health.vendors.cisco_ewlc import (
+    SSH_COMMANDS as CISCO_EWLC_COMMANDS,
+    parse_ssh_output as cisco_ewlc_parse,
+    collect_ssh_output as cisco_ewlc_collect,
+)
 from flask import (
     Flask, render_template, request, redirect, url_for,
     jsonify, flash, send_file, session, abort
@@ -64,6 +73,9 @@ db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 socketio = SocketIO(app, async_mode='threading')
+
+# Wireless health engine (loaded once at startup)
+_wireless_engine = WirelessHealthEngine()
 
 # Timezone configuration
 APP_TIMEZONE = os.environ.get('APP_TIMEZONE', 'UTC')
@@ -226,6 +238,11 @@ class Device(db.Model):
     latency = db.Column(db.Float, default=0.0)
     is_monitored = db.Column(db.Boolean, default=True, nullable=False)
     wireless_info = db.Column(db.String(100), default="")
+    ssh_username = db.Column(db.String(80), default='')
+    ssh_password = db.Column(db.String(120), default='')
+    ssh_port = db.Column(db.Integer, default=22)
+    ap_vendor = db.Column(db.String(50), default='')
+    ap_model = db.Column(db.String(100), default='')
     signal_threshold_dbm = db.Column(db.Integer, default=DEFAULT_SIGNAL_THRESHOLD_DBM)
     link_quality_threshold = db.Column(db.Integer, default=DEFAULT_LINK_QUALITY_THRESHOLD)
     snr_threshold_db = db.Column(db.Integer, default=DEFAULT_SNR_THRESHOLD_DB)
@@ -287,11 +304,38 @@ class DeviceEvent(db.Model):
         return f'<DeviceEvent {self.event_type}/{self.severity} for {self.device_id}>'
 
 
+class WirelessAnalysis(db.Model):
+    """Stores the latest wireless health analysis result per device."""
+    __table_args__ = (
+        db.Index('ix_wireless_analysis_device_timestamp', 'device_id', 'timestamp'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    device_id = db.Column(db.Integer, db.ForeignKey('device.id'), nullable=False)
+    timestamp = db.Column(
+        db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    vendor = db.Column(db.String(50), default='')
+    model = db.Column(db.String(100), default='')
+    overall_score = db.Column(db.Float, default=0.0)
+    health_classification = db.Column(db.String(30), default='')
+    star_rating = db.Column(db.String(10), default='')
+    health_color = db.Column(db.String(15), default='grey')
+    raw_metrics_json = db.Column(db.Text, default='{}')
+    analysis_json = db.Column(db.Text, default='{}')
+
+    device = db.relationship('Device', backref=db.backref('wireless_analyses', lazy=True, cascade='all, delete-orphan'))
+
+    def __repr__(self):
+        return f'<WirelessAnalysis device={self.device_id} score={self.overall_score}>'
+
+
 class IncidentReport(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     device_id = db.Column(db.Integer, db.ForeignKey('device.id'), nullable=False)
     issue_type = db.Column(db.String(50), nullable=False)
     details = db.Column(db.String(255), nullable=True)
+    severity = db.Column(db.String(20), default='warning', nullable=False)
     timestamp = db.Column(
         db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
     )
@@ -301,13 +345,53 @@ class IncidentReport(db.Model):
         return f'<Incident {self.issue_type} for {self.device_id} at {self.timestamp}>'
 
 
+# ---------------------------------------------------------------------------
+# Role-based permission system
+# ---------------------------------------------------------------------------
+
+ROLE_LABELS = {
+    'admin':      'Admin',
+    'supervisor': 'Supervisor',
+    'operator':   'Operator',
+    'viewer':     'Viewer',
+}
+
+ROLE_PERMISSIONS = {
+    # admin: unrestricted
+    'admin':      frozenset({'view', 'add_device', 'edit_device', 'delete_device',
+                             'delete_logs', 'admin_page'}),
+    # supervisor: full device CRUD, no log deletion, no admin page
+    'supervisor': frozenset({'view', 'add_device', 'edit_device', 'delete_device'}),
+    # operator: read + add/edit devices (no delete)
+    'operator':   frozenset({'view', 'add_device', 'edit_device'}),
+    # viewer: read-only monitoring
+    'viewer':     frozenset({'view'}),
+}
+
+
+def user_can(perm: str) -> bool:
+    """Return True if the current user holds the given permission."""
+    if not current_user.is_authenticated:
+        return False
+    role = getattr(current_user, 'role', 'viewer') or 'viewer'
+    return perm in ROLE_PERMISSIONS.get(role, frozenset())
+
+
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password = db.Column(db.String(120), nullable=False)
     email = db.Column(db.String(120))
-    is_admin = db.Column(db.Boolean, default=True)
+    role = db.Column(db.String(20), default='viewer', nullable=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    @property
+    def is_admin(self):
+        return self.role == 'admin'
+
+    @property
+    def role_label(self):
+        return ROLE_LABELS.get(self.role, self.role.capitalize())
 
 
 @login_manager.user_loader
@@ -371,7 +455,8 @@ def dashboard():
     last_30m_naive = (datetime.now(timezone.utc) - timedelta(minutes=30)).replace(tzinfo=None)
     recent_incident_device_ids = set(
         r.device_id for r in IncidentReport.query.filter(
-            IncidentReport.timestamp >= last_30m_naive
+            IncidentReport.timestamp >= last_30m_naive,
+            IncidentReport.severity != 'info',
         ).with_entities(IncidentReport.device_id).all()
     )
     active_issue_ids = {
@@ -402,6 +487,18 @@ def dashboard():
         )
     }
 
+    last_device = Device.query.order_by(Device.id.desc()).first()
+    last_device_data = None
+    if last_device:
+        last_device_data = {
+            'name':            last_device.name or '',
+            'site':            last_device.site or 'Default Site',
+            'zone':            last_device.zone or '',
+            'location':        last_device.location or '',
+            'device_type':     last_device.device_type or 'other',
+            'monitor_profile': last_device.monitor_profile or 'ping',
+        }
+
     return render_template(
         'dashboard.html',
         devices=devices,
@@ -414,12 +511,15 @@ def dashboard():
         default_signal_threshold_dbm=DEFAULT_SIGNAL_THRESHOLD_DBM,
         default_link_quality_threshold=DEFAULT_LINK_QUALITY_THRESHOLD,
         default_snr_threshold_db=DEFAULT_SNR_THRESHOLD_DB,
+        last_device_data=last_device_data,
     )
 
 
 @app.route('/add_device', methods=['POST'])
 @login_required
 def add_device():
+    if not user_can('add_device'):
+        abort(403)
     try:
         name = request.form.get('name', '').strip()
         ip_address = request.form.get('ip', '').strip()
@@ -488,6 +588,8 @@ def add_device():
 @app.route('/delete_device/<int:device_id>', methods=['POST'])
 @login_required
 def delete_device(device_id):
+    if not user_can('delete_device'):
+        abort(403)
     device = Device.query.get_or_404(device_id)
     db.session.delete(device)
     db.session.commit()
@@ -498,6 +600,8 @@ def delete_device(device_id):
 @app.route('/edit_device/<int:device_id>', methods=['GET', 'POST'])
 @login_required
 def edit_device(device_id):
+    if not user_can('edit_device'):
+        abort(403)
     device = Device.query.get_or_404(device_id)
     if request.method == 'POST':
         name = request.form.get('name', '').strip()
@@ -548,6 +652,11 @@ def edit_device(device_id):
         device.link_quality_threshold = link_quality_threshold
         device.snr_threshold_db = snr_threshold_db
         device.is_monitored = request.form.get('is_monitored') == 'on'
+        device.ssh_username = request.form.get('ssh_username', '').strip()
+        device.ssh_password = request.form.get('ssh_password', '').strip()
+        device.ssh_port = parse_int_field(request.form.get('ssh_port'), 22, 1, 65535)
+        device.ap_vendor = request.form.get('ap_vendor', '').strip()
+        device.ap_model = request.form.get('ap_model', '').strip()
         db.session.commit()
         flash(f'Device {device.name} updated successfully', 'success')
         return redirect(url_for('dashboard'))
@@ -695,7 +804,8 @@ def api_status():
     last_30m_naive = (datetime.now(timezone.utc) - timedelta(minutes=30)).replace(tzinfo=None)
     incident_ids = set(
         r.device_id for r in IncidentReport.query.filter(
-            IncidentReport.timestamp >= last_30m_naive
+            IncidentReport.timestamp >= last_30m_naive,
+            IncidentReport.severity != 'info',
         ).with_entities(IncidentReport.device_id).all()
     )
     return jsonify({
@@ -741,6 +851,278 @@ def api_events():
             'timestamp': to_iso_with_tz(e.timestamp),
         } for e in events],
         'timestamp': to_iso_with_tz(datetime.now(timezone.utc)),
+    })
+
+
+# ==================== WIRELESS HEALTH ====================
+
+def _detect_vendor_model(device):
+    """Return (vendor, model) for a device.
+
+    Explicit per-device fields take priority; falls back to name/type heuristics.
+    wireless_info stores a runtime summary string, not a vendor:model tag.
+    """
+    if device.ap_vendor:
+        return device.ap_vendor, device.ap_model or ''
+
+    name = device.name.lower()
+    dtype = (device.device_type or '').lower()
+
+    if any(k in name or k in dtype for k in ('cisco', 'c9800', 'ewlc', 'catalyst', 'wlc')):
+        return 'Cisco', 'eWLC'
+    if any(k in name or k in dtype for k in ('ligowave', 'dlb', 'apc')):
+        return 'Ligowave', ''
+    if any(k in name or k in dtype for k in ('ubiquiti', 'ubnt', 'unifi', 'litebeam', 'nanobeam', 'airmax')):
+        return 'Ubiquiti', ''
+    if any(k in name or k in dtype for k in ('mikrotik', 'routerboard', 'rb')):
+        return 'MikroTik', ''
+    if any(k in name or k in dtype for k in ('cambium', 'epmp', 'pmp')):
+        return 'Cambium', ''
+
+    return 'Generic', ''
+
+
+def _get_vendor_parser(vendor: str):
+    """Return (parse_fn, ssh_commands) for the given vendor name."""
+    if 'cisco' in vendor.lower():
+        return cisco_ewlc_parse, CISCO_EWLC_COMMANDS
+    return ligowave_parse, [
+        'uptime', 'iwconfig', 'cat /proc/net/wireless',
+        'iw dev wlan0 station dump', 'cat /proc/loadavg', 'free -m',
+    ]
+
+
+def _save_analysis(device_id: int, vendor: str, model: str, result) -> None:
+    """Persist analysis result to WirelessAnalysis table (upsert latest)."""
+    try:
+        existing = WirelessAnalysis.query.filter_by(device_id=device_id).first()
+        if existing:
+            existing.timestamp = datetime.now(timezone.utc)
+            existing.vendor = vendor
+            existing.model = model
+            existing.overall_score = result.overall_score
+            existing.health_classification = result.health_classification
+            existing.star_rating = result.star_rating
+            existing.health_color = result.health_color
+            existing.raw_metrics_json = json.dumps(result.raw_metrics)
+            existing.analysis_json = json.dumps(result.to_dict())
+        else:
+            db.session.add(WirelessAnalysis(
+                device_id=device_id,
+                vendor=vendor,
+                model=model,
+                overall_score=result.overall_score,
+                health_classification=result.health_classification,
+                star_rating=result.star_rating,
+                health_color=result.health_color,
+                raw_metrics_json=json.dumps(result.raw_metrics),
+                analysis_json=json.dumps(result.to_dict()),
+            ))
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        logger.warning(f'Could not save wireless analysis: {exc}')
+
+
+@app.route('/wireless')
+@login_required
+def wireless_health():
+    """Wireless health fleet dashboard page."""
+    devices = Device.query.filter(
+        Device.is_monitored.is_(True),
+        or_(
+            Device.monitor_profile == 'wireless_ap',
+            Device.device_type.in_(['ap', 'outdoor_ap']),
+        ),
+    ).order_by(Device.site, Device.name).all()
+
+    analyses = {
+        wa.device_id: wa
+        for wa in WirelessAnalysis.query.all()
+    }
+
+    fleet = []
+    for d in devices:
+        wa = analyses.get(d.id)
+        fleet.append({
+            'device': d,
+            'analysis': json.loads(wa.analysis_json) if wa else None,
+            'score': wa.overall_score if wa else None,
+            'classification': wa.health_classification if wa else 'No Data',
+            'health_color': wa.health_color if wa else 'grey',
+            'star_rating': wa.star_rating if wa else '',
+            'timestamp': format_dt(wa.timestamp) if wa else None,
+        })
+
+    # Sort by score ascending (worst first) so critical links are at the top
+    fleet.sort(key=lambda x: (x['score'] is None, -(x['score'] or 0)))
+
+    all_vendors = sorted({
+        json.loads(wa.analysis_json).get('vendor', '')
+        for wa in analyses.values()
+        if wa and json.loads(wa.analysis_json).get('vendor')
+    })
+
+    return render_template(
+        'wireless_health.html',
+        fleet=fleet,
+        all_vendors=all_vendors,
+    )
+
+
+@app.route('/wireless/<int:device_id>')
+@login_required
+def wireless_device(device_id):
+    """Single-device wireless health analysis page."""
+    device = Device.query.get_or_404(device_id)
+    wa = WirelessAnalysis.query.filter_by(device_id=device_id).first()
+    analysis = json.loads(wa.analysis_json) if wa else None
+    return render_template(
+        'wireless_health.html',
+        fleet=None,
+        single_device=device,
+        analysis=analysis,
+        last_updated=format_dt(wa.timestamp) if wa else None,
+    )
+
+
+@app.route('/api/wireless/analyze', methods=['POST'])
+@login_required
+def api_wireless_analyze():
+    """Analyze a dict of wireless metrics and return full analysis JSON.
+
+    Accepts JSON body:
+    {
+        "metrics": {"signal": -62, "snr": 28, ...},
+        "vendor": "Ligowave",
+        "model": "DLB APC 5M-90 V3",
+        "device_name": "Tower-01",
+        "device_id": 5,
+        "ip_address": "192.168.1.10",
+        "site": "Main Tower"
+    }
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    raw_metrics = data.get('metrics', {})
+    vendor = data.get('vendor', 'Generic')
+    model = data.get('model', '')
+    device_name = data.get('device_name', 'Unknown')
+    device_id = data.get('device_id')
+    ip_address = data.get('ip_address', '')
+    site = data.get('site', '')
+
+    if not raw_metrics:
+        return jsonify({'error': 'metrics object is required'}), 400
+
+    result = _wireless_engine.analyze(
+        raw_metrics=raw_metrics,
+        vendor=vendor,
+        model=model,
+        device_name=device_name,
+        device_id=device_id,
+        ip_address=ip_address,
+        site=site,
+    )
+
+    if device_id:
+        _save_analysis(device_id, vendor, model, result)
+
+    return jsonify(result.to_dict())
+
+
+@app.route('/api/wireless/analyze/<int:device_id>')
+@login_required
+def api_wireless_analyze_device(device_id):
+    """SSH into a monitored device, parse its wireless stats, and return analysis.
+
+    Requires AP_USERNAME / AP_PASSWORD environment variables.
+    Optional query params: vendor, model
+    """
+    device = Device.query.get_or_404(device_id)
+    ap_username = device.ssh_username or os.environ.get('AP_USERNAME')
+    ap_password = device.ssh_password or os.environ.get('AP_PASSWORD')
+    ap_port = device.ssh_port or 22
+
+    if not ap_username or not ap_password:
+        return jsonify({'error': 'No SSH credentials — set per-device or AP_USERNAME/AP_PASSWORD in .env'}), 503
+
+    vendor = request.args.get('vendor') or _detect_vendor_model(device)[0]
+    model  = request.args.get('model')  or _detect_vendor_model(device)[1]
+    parse_fn, ssh_commands = _get_vendor_parser(vendor)
+    is_cisco = 'cisco' in vendor.lower()
+
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        if is_cisco:
+            client.connect(
+                device.ip_address, port=ap_port,
+                username=ap_username, password=ap_password,
+                timeout=15, look_for_keys=False, allow_agent=False,
+            )
+            raw_output = cisco_ewlc_collect(client, timeout=30)
+        else:
+            client.connect(
+                device.ip_address, port=ap_port,
+                username=ap_username, password=ap_password,
+                timeout=15,
+                disabled_algorithms={'pubkeys': ['rsa-sha2-512', 'rsa-sha2-256']},
+            )
+            combined = []
+            for cmd in ssh_commands:
+                _, stdout, _ = client.exec_command(cmd)
+                combined.append(stdout.read().decode('utf-8', errors='ignore'))
+            raw_output = '\n'.join(combined)
+    except Exception as exc:
+        return jsonify({'error': f'SSH failed: {exc}'}), 502
+    finally:
+        client.close()
+
+    raw_metrics = parse_fn(raw_output, model=model)
+
+    result = _wireless_engine.analyze(
+        raw_metrics=raw_metrics,
+        vendor=vendor,
+        model=model,
+        device_name=device.name,
+        device_id=device.id,
+        ip_address=device.ip_address,
+        site=device.site or '',
+    )
+
+    _save_analysis(device.id, vendor, model, result)
+
+    return jsonify(result.to_dict())
+
+
+@app.route('/api/wireless/fleet')
+@login_required
+def api_wireless_fleet():
+    """Return latest wireless analysis for all monitored wireless devices."""
+    analyses = WirelessAnalysis.query.all()
+    fleet = []
+    for wa in analyses:
+        device = db.session.get(Device, wa.device_id)
+        if not device:
+            continue
+        entry = json.loads(wa.analysis_json) if wa.analysis_json else {}
+        entry['device_name'] = device.name
+        entry['ip_address'] = device.ip_address
+        entry['site'] = device.site or ''
+        entry['timestamp'] = to_iso_with_tz(wa.timestamp)
+        fleet.append(entry)
+
+    fleet.sort(key=lambda x: x.get('overall_score', 0))
+    return jsonify({'fleet': fleet, 'count': len(fleet)})
+
+
+@app.route('/api/wireless/vendors')
+@login_required
+def api_wireless_vendors():
+    """Return registered vendor/model profiles."""
+    return jsonify({
+        'profiles': _wireless_engine.registry.list_profiles(),
+        'vendors': _wireless_engine.registry.get_vendors(),
     })
 
 
@@ -807,6 +1189,7 @@ def export_report(what, fmt):
             'device_name': r.device.name if r.device else '',
             'ip_address': r.device.ip_address if r.device else '',
             'issue_type': r.issue_type,
+            'severity': r.severity,
             'details': r.details or '',
             'timestamp': r.timestamp.isoformat(),
         } for r in report_data]
@@ -1060,16 +1443,12 @@ def emit_status_update(devices, now_utc):
 def start_ap_monitoring():
     """Background thread that monitors AP devices via SSH."""
     global monitoring_active
-    
-    ap_username = os.environ.get('AP_USERNAME')
-    ap_password = os.environ.get('AP_PASSWORD')
-    
-    if not ap_username or not ap_password:
-        logger.warning('AP_USERNAME or AP_PASSWORD not set. AP SSH monitoring disabled.')
-        return
+
+    global_username = os.environ.get('AP_USERNAME')
+    global_password = os.environ.get('AP_PASSWORD')
 
     logger.info('[*] AP SSH monitoring started...')
-    
+
     while monitoring_active:
         try:
             with app.app_context():
@@ -1080,55 +1459,120 @@ def start_ap_monitoring():
                         Device.device_type.in_(['ap', 'outdoor_ap']),
                     ),
                 ).all()
-                
+
                 for device in devices:
                     if not monitoring_active:
                         break
-                        
+
+                    ap_username = device.ssh_username or global_username
+                    ap_password = device.ssh_password or global_password
+                    ap_port = device.ssh_port or 22
+
+                    if not ap_username or not ap_password:
+                        logger.warning(
+                            f'No SSH credentials for {device.name} — '
+                            'set per-device or AP_USERNAME/AP_PASSWORD in .env. Skipping.'
+                        )
+                        continue
+
+                    vendor, model = _detect_vendor_model(device)
+                    parse_fn, ssh_commands = _get_vendor_parser(vendor)
+                    is_cisco = 'cisco' in vendor.lower()
+
                     client = paramiko.SSHClient()
                     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                     try:
-                        logger.info(f'Connecting to AP {device.name} ({device.ip_address}) via SSH...')
-                        client.connect(device.ip_address, username=ap_username, password=ap_password, timeout=10, disabled_algorithms={'pubkeys': ['rsa-sha2-512', 'rsa-sha2-256']})
-                        
-                        commands = ["uptime", "iwconfig"]
-                        results = []
-                        for cmd in commands:
-                            stdin, stdout, stderr = client.exec_command(cmd)
-                            out = stdout.read().decode('utf-8', errors='ignore').strip()
-                            if out:
-                                results.append(f"--- {cmd} ---\n{out}")
-                                
-                        if results:
+                        logger.info(f'Connecting to {device.name} ({device.ip_address}:{ap_port}) [{vendor}] via SSH...')
+                        if is_cisco:
+                            client.connect(
+                                device.ip_address, port=ap_port,
+                                username=ap_username, password=ap_password,
+                                timeout=15, look_for_keys=False, allow_agent=False,
+                            )
+                            out_combined = cisco_ewlc_collect(client, timeout=30)
+                        else:
+                            client.connect(
+                                device.ip_address, port=ap_port,
+                                username=ap_username, password=ap_password,
+                                timeout=10,
+                                disabled_algorithms={'pubkeys': ['rsa-sha2-512', 'rsa-sha2-256']},
+                            )
+                            results = []
+                            for cmd in ssh_commands:
+                                _, stdout, _ = client.exec_command(cmd)
+                                out = stdout.read().decode('utf-8', errors='ignore').strip()
+                                if out:
+                                    results.append(f"--- {cmd} ---\n{out}")
                             out_combined = "\n".join(results)
-                            log_msg = f"\n[{datetime.now(timezone.utc).isoformat()}] AP Stats for {device.name} ({device.ip_address}):\n{out_combined}\n"
-                            
+
+                        if out_combined:
                             with open('ap_metrics.log', 'a') as f:
-                                f.write(log_msg)
-                            logger.info(f'Successfully logged AP metrics for {device.name}')
-                            
-                            import re
-                            mode_match = re.search(r'Mode:([A-Za-z]+)', out_combined)
-                            rate_match = re.search(r'Bit Rate=([\d.]+\s*[A-Za-z/]+)', out_combined)
-                            signal_match = re.search(r'Signal level[:=]\s*(-\d+\s*dBm)', out_combined)
-                            noise_match = re.search(r'Noise level[:=]\s*(-\d+\s*dBm)', out_combined)
-                            link_match = re.search(r'Link Quality=([\d/]+)', out_combined)
-                            info_parts = []
-                            if mode_match:
-                                info_parts.append(f"Mode: {mode_match.group(1)}")
-                            if rate_match:
-                                info_parts.append(f"Rate: {rate_match.group(1)}")
-                            if signal_match:
-                                info_parts.append(f"Sig: {signal_match.group(1)}")
-                            if noise_match:
-                                info_parts.append(f"Noise: {noise_match.group(1)}")
-                            if link_match:
-                                info_parts.append(f"Link: {link_match.group(1)}")
-                            if info_parts:
-                                device.wireless_info = " | ".join(info_parts)
-                                db.session.commit()
-                                
-                                # Anomaly Detection
+                                f.write(f"\n[{datetime.now(timezone.utc).isoformat()}] {vendor} Stats for {device.name} ({device.ip_address}):\n{out_combined}\n")
+                            logger.info(f'Successfully collected metrics for {device.name}')
+
+                            raw_metrics = parse_fn(out_combined, model=model)
+
+                            # Build wireless_info display string
+                            if is_cisco:
+                                info_parts = []
+                                ap_joined = raw_metrics.get('ap_joined')
+                                ap_total = raw_metrics.get('ap_total')
+                                if ap_joined is not None and ap_total is not None:
+                                    info_parts.append(f"APs: {ap_joined}/{ap_total}")
+                                elif ap_total is not None:
+                                    info_parts.append(f"APs: {ap_total}")
+                                if raw_metrics.get('client_count') is not None:
+                                    info_parts.append(f"Clients: {raw_metrics['client_count']}")
+                                if raw_metrics.get('snr') is not None:
+                                    info_parts.append(f"Avg SNR: {raw_metrics['snr']} dB")
+                                if raw_metrics.get('tx_power') is not None:
+                                    info_parts.append(f"Avg TxPwr: {raw_metrics['tx_power']} dBm")
+                                if info_parts:
+                                    device.wireless_info = " | ".join(info_parts)
+                                    db.session.commit()
+                            else:
+                                # Linux wireless devices: build info from iwconfig fields
+                                mode_match = re.search(r'Mode:([A-Za-z]+)', out_combined)
+                                rate_match = re.search(r'Bit Rate=([\d.]+\s*[A-Za-z/]+)', out_combined)
+                                signal_match = re.search(r'Signal level[:=]\s*(-\d+\s*dBm)', out_combined)
+                                noise_match = re.search(r'Noise level[:=]\s*(-\d+\s*dBm)', out_combined)
+                                link_match = re.search(r'Link Quality=([\d/]+)', out_combined)
+                                info_parts = []
+                                if mode_match:
+                                    info_parts.append(f"Mode: {mode_match.group(1)}")
+                                if rate_match:
+                                    info_parts.append(f"Rate: {rate_match.group(1)}")
+                                if signal_match:
+                                    info_parts.append(f"Sig: {signal_match.group(1)}")
+                                if noise_match:
+                                    info_parts.append(f"Noise: {noise_match.group(1)}")
+                                if link_match:
+                                    info_parts.append(f"Link: {link_match.group(1)}")
+                                if info_parts:
+                                    device.wireless_info = " | ".join(info_parts)
+                                    db.session.commit()
+
+                            # Run wireless health engine and persist result
+                            try:
+                                health_result = _wireless_engine.analyze(
+                                    raw_metrics=raw_metrics,
+                                    vendor=vendor,
+                                    model=model,
+                                    device_name=device.name,
+                                    device_id=device.id,
+                                    ip_address=device.ip_address,
+                                    site=device.site or '',
+                                )
+                                _save_analysis(device.id, vendor, model, health_result)
+                                logger.info(
+                                    f'Wireless health: {device.name} score={health_result.overall_score:.1f} '
+                                    f'({health_result.health_classification})'
+                                )
+                            except Exception as _he:
+                                logger.warning(f'Wireless health engine error for {device.name}: {_he}')
+
+                            # Linux-specific per-link anomaly detection
+                            if not is_cisco and info_parts:
                                 issue_found = None
                                 details = None
                                 mode_val = mode_match.group(1).strip().lower() if mode_match else ''
@@ -1152,7 +1596,7 @@ def start_ap_monitoring():
                                         noise_val = int(noise_match.group(1).replace('dBm', '').strip())
                                     except ValueError:
                                         noise_val = None
-                                
+
                                 if signal_match:
                                     try:
                                         sig_val = int(signal_match.group(1).replace('dBm', '').strip())
@@ -1174,7 +1618,7 @@ def start_ap_monitoring():
                                 if snr_val is not None and snr_val < snr_threshold and not issue_found:
                                     issue_found = "Low SNR"
                                     details = f"SNR dropped to {snr_val} dB (threshold {snr_threshold} dB)"
-                                
+
                                 if link_match and not issue_found:
                                     link_str = link_match.group(1)
                                     if '/' in link_str:
@@ -1189,12 +1633,30 @@ def start_ap_monitoring():
                                                     and (rate_val is None or rate_val >= 100)
                                                 )
                                                 if master_with_good_rf:
-                                                    logger.info(
-                                                        f"Ignoring master-side Link Quality {link_str} for "
-                                                        f"{device.name}; RF is healthy "
-                                                        f"(signal {sig_val} dBm, noise {noise_val} dBm, "
-                                                        f"SNR {snr_val} dB, rate {rate_val or 'unknown'} Mb/s)."
+                                                    info_details = (
+                                                        f"Link Quality {link_str} on master side — "
+                                                        f"RF healthy (signal {sig_val} dBm, "
+                                                        f"SNR {snr_val} dB, rate {rate_val or 'unknown'} Mb/s)"
                                                     )
+                                                    thirty_mins_ago = datetime.now(timezone.utc) - timedelta(minutes=30)
+                                                    thirty_mins_ago_naive = thirty_mins_ago.replace(tzinfo=None)
+                                                    recent_info = IncidentReport.query.filter(
+                                                        IncidentReport.device_id == device.id,
+                                                        IncidentReport.issue_type == "Link Quality",
+                                                        IncidentReport.severity == 'info',
+                                                        IncidentReport.timestamp >= thirty_mins_ago_naive
+                                                    ).first()
+                                                    if not recent_info:
+                                                        db.session.add(IncidentReport(
+                                                            device_id=device.id,
+                                                            issue_type="Link Quality",
+                                                            details=info_details,
+                                                            severity='info',
+                                                        ))
+                                                        db.session.commit()
+                                                        logger.info(
+                                                            f"Recorded info-level Link Quality for {device.name}: {info_details}"
+                                                        )
                                                 else:
                                                     issue_found = "Poor Link Quality"
                                                     details = (
@@ -1203,25 +1665,26 @@ def start_ap_monitoring():
                                                     )
                                         except (ValueError, ZeroDivisionError):
                                             pass
-                                            
+
                                 if issue_found:
                                     thirty_mins_ago = datetime.now(timezone.utc) - timedelta(minutes=30)
                                     thirty_mins_ago_naive = thirty_mins_ago.replace(tzinfo=None)
                                     recent = IncidentReport.query.filter(
                                         IncidentReport.device_id == device.id,
                                         IncidentReport.issue_type == issue_found,
+                                        IncidentReport.severity == 'warning',
                                         IncidentReport.timestamp >= thirty_mins_ago_naive
                                     ).first()
                                     if not recent:
-                                        new_incident = IncidentReport(
+                                        db.session.add(IncidentReport(
                                             device_id=device.id,
                                             issue_type=issue_found,
-                                            details=details
-                                        )
-                                        db.session.add(new_incident)
+                                            details=details,
+                                            severity='warning',
+                                        ))
                                         db.session.commit()
                                         logger.warning(f"Generated IncidentReport for {device.name}: {issue_found} - {details}")
-                            
+
                     except Exception as e:
                         logger.error(f'SSH Error for {device.name} ({device.ip_address}): {e}')
                     finally:
@@ -1311,7 +1774,7 @@ def create_default_user():
             hashed = generate_password_hash(admin_pw)
             new_user = User(
                 username='admin', password=hashed,
-                email='admin@network.local', is_admin=True,
+                email='admin@network.local', role='admin',
             )
             db.session.add(new_user)
             db.session.commit()
@@ -1353,6 +1816,42 @@ def ensure_database_schema():
             )
         if 'is_monitored' not in columns:
             conn.exec_driver_sql("ALTER TABLE device ADD COLUMN is_monitored BOOLEAN DEFAULT 1 NOT NULL")
+        if 'ssh_username' not in columns:
+            conn.exec_driver_sql("ALTER TABLE device ADD COLUMN ssh_username VARCHAR(80) DEFAULT ''")
+        if 'ssh_password' not in columns:
+            conn.exec_driver_sql("ALTER TABLE device ADD COLUMN ssh_password VARCHAR(120) DEFAULT ''")
+        if 'ssh_port' not in columns:
+            conn.exec_driver_sql("ALTER TABLE device ADD COLUMN ssh_port INTEGER DEFAULT 22")
+        if 'ap_vendor' not in columns:
+            conn.exec_driver_sql("ALTER TABLE device ADD COLUMN ap_vendor VARCHAR(50) DEFAULT ''")
+        if 'ap_model' not in columns:
+            conn.exec_driver_sql("ALTER TABLE device ADD COLUMN ap_model VARCHAR(100) DEFAULT ''")
+
+    if 'incident_report' in inspector.get_table_names():
+        incident_columns = {col['name'] for col in inspector.get_columns('incident_report')}
+        with db.engine.begin() as conn:
+            if 'severity' not in incident_columns:
+                conn.exec_driver_sql(
+                    "ALTER TABLE incident_report ADD COLUMN severity VARCHAR(20) DEFAULT 'warning' NOT NULL"
+                )
+
+    # Migrate `user` table: add role column, promote existing admins
+    if 'user' in inspector.get_table_names():
+        user_cols = {col['name'] for col in inspector.get_columns('user')}
+        with db.engine.begin() as conn:
+            if 'role' not in user_cols:
+                conn.exec_driver_sql(
+                    "ALTER TABLE user ADD COLUMN role VARCHAR(20) DEFAULT 'viewer'"
+                )
+                # Promote existing is_admin=1 users to admin role
+                if 'is_admin' in user_cols:
+                    conn.exec_driver_sql(
+                        "UPDATE user SET role = 'admin' WHERE is_admin = 1"
+                    )
+
+    # Create wireless_analysis table if not present
+    if 'wireless_analysis' not in inspector.get_table_names():
+        db.create_all()
 
 
 @app.cli.command('network:poll-devices')
@@ -1397,9 +1896,10 @@ def poll_devices_command(include_paused):
 @app.route('/admin/history_manage')
 @login_required
 def admin_history_manage():
-    if not getattr(current_user, 'is_admin', False):
+    if not user_can('admin_page'):
         abort(403)
-    return render_template('admin_history_manage.html')
+    users = User.query.order_by(User.username).all()
+    return render_template('admin_history_manage.html', users=users, role_labels=ROLE_LABELS)
 
 
 def _build_csv_bytes(rows):
@@ -1428,7 +1928,7 @@ def _build_reports_csv_bytes(rows):
     bio = io.BytesIO()
     text_wrapper = io.TextIOWrapper(bio, encoding='utf-8', newline='')
     writer = csv.writer(text_wrapper)
-    writer.writerow(['id', 'device_id', 'device_name', 'ip_address', 'issue_type', 'details', 'timestamp'])
+    writer.writerow(['id', 'device_id', 'device_name', 'ip_address', 'issue_type', 'severity', 'details', 'timestamp'])
     for r in rows:
         writer.writerow([
             r.id,
@@ -1436,6 +1936,7 @@ def _build_reports_csv_bytes(rows):
             r.device.name if r.device else '',
             r.device.ip_address if r.device else '',
             r.issue_type,
+            r.severity,
             r.details or '',
             r.timestamp.isoformat() if r.timestamp else '',
         ])
@@ -1448,7 +1949,7 @@ def _build_reports_csv_bytes(rows):
 @app.route('/admin/clear_reports', methods=['POST'])
 @login_required
 def admin_clear_reports():
-    if not getattr(current_user, 'is_admin', False):
+    if not user_can('admin_page'):
         abort(403)
 
     backup = request.form.get('backup')
@@ -1474,7 +1975,7 @@ def admin_clear_reports():
 @app.route('/admin/clear_history', methods=['POST'])
 @login_required
 def admin_clear_history():
-    if not getattr(current_user, 'is_admin', False):
+    if not user_can('admin_page'):
         abort(403)
 
     action = request.form.get('action')
@@ -1598,7 +2099,7 @@ def admin_clear_history():
 @app.route('/admin/reset_password', methods=['POST'])
 @login_required
 def admin_reset_password():
-    if not getattr(current_user, 'is_admin', False):
+    if not user_can('admin_page'):
         abort(403)
 
     username = request.form.get('username', '').strip()
@@ -1621,6 +2122,99 @@ def admin_reset_password():
     user.password = generate_password_hash(new_password)
     db.session.commit()
     flash(f'Password reset successfully for user {user.username}.', 'success')
+    return redirect(url_for('admin_history_manage'))
+
+
+@app.route('/admin/users/add', methods=['POST'])
+@login_required
+def admin_add_user():
+    if not user_can('admin_page'):
+        abort(403)
+
+    username = request.form.get('username', '').strip()
+    email = request.form.get('email', '').strip()
+    password = request.form.get('password', '').strip()
+    confirm_password = request.form.get('confirm_password', '').strip()
+    role = request.form.get('role', 'viewer').strip()
+
+    if role not in ROLE_PERMISSIONS:
+        flash('Invalid role selected.', 'error')
+        return redirect(url_for('admin_history_manage'))
+
+    if not username or not password:
+        flash('Username and password are required.', 'error')
+        return redirect(url_for('admin_history_manage'))
+
+    if len(password) < 6:
+        flash('Password must be at least 6 characters.', 'error')
+        return redirect(url_for('admin_history_manage'))
+
+    if password != confirm_password:
+        flash('Passwords do not match.', 'error')
+        return redirect(url_for('admin_history_manage'))
+
+    if User.query.filter_by(username=username).first():
+        flash(f'Username "{username}" is already taken.', 'error')
+        return redirect(url_for('admin_history_manage'))
+
+    new_u = User(
+        username=username,
+        email=email or None,
+        password=generate_password_hash(password),
+        role=role,
+    )
+    db.session.add(new_u)
+    db.session.commit()
+    flash(f'User "{username}" created with role "{ROLE_LABELS.get(role, role)}".', 'success')
+    return redirect(url_for('admin_history_manage'))
+
+
+@app.route('/admin/users/<int:user_id>/role', methods=['POST'])
+@login_required
+def admin_change_role(user_id):
+    if not user_can('admin_page'):
+        abort(403)
+
+    target = db.session.get(User, user_id)
+    if not target:
+        abort(404)
+
+    if target.id == current_user.id:
+        flash('You cannot change your own role.', 'error')
+        return redirect(url_for('admin_history_manage'))
+
+    new_role = request.form.get('role', '').strip()
+    if new_role not in ROLE_PERMISSIONS:
+        flash('Invalid role.', 'error')
+        return redirect(url_for('admin_history_manage'))
+
+    target.role = new_role
+    db.session.commit()
+    flash(f'Role for "{target.username}" changed to "{ROLE_LABELS.get(new_role, new_role)}".', 'success')
+    return redirect(url_for('admin_history_manage'))
+
+
+@app.route('/admin/users/<int:user_id>/delete', methods=['POST'])
+@login_required
+def admin_delete_user(user_id):
+    if not user_can('admin_page'):
+        abort(403)
+
+    target = db.session.get(User, user_id)
+    if not target:
+        abort(404)
+
+    if target.id == current_user.id:
+        flash('You cannot delete your own account.', 'error')
+        return redirect(url_for('admin_history_manage'))
+
+    if target.username == 'admin':
+        flash('The built-in admin account cannot be deleted.', 'error')
+        return redirect(url_for('admin_history_manage'))
+
+    db.session.delete(target)
+    db.session.commit()
+    flash(f'User "{target.username}" deleted.', 'success')
     return redirect(url_for('admin_history_manage'))
 
 

@@ -1,20 +1,45 @@
 {% extends "base.html" %}
 
-{% block title %}Manage History - Network Monitor{% endblock %}
+{% block title %}Admin - Network Monitor{% endblock %}
 
 {% block extra_head %}
 <style>
     .container { max-width: 1000px; }
     h1 { margin-bottom: 12px; font-size: 30px; }
     p { color: var(--text-dim); line-height: 1.7; }
-    .admin-section { margin-bottom: 24px; }
+    .admin-section { margin-bottom: 28px; }
+    .admin-section h2 { font-size: 18px; font-weight: 600; margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
     .form-group { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
     .form-group label { color: var(--text-dim); font-size: 14px; display: flex; align-items: center; gap: 8px; }
-    .form-group input[type=datetime-local] { background: var(--input-bg); border: 1px solid var(--border); color: var(--text); padding: 10px 12px; border-radius: 10px; }
+    .form-group input[type=datetime-local],
     .form-group input[type=text],
-    .form-group input[type=password] { background: var(--input-bg); border: 1px solid var(--border); color: var(--text); padding: 10px 12px; border-radius: 10px; }
+    .form-group input[type=password],
+    .form-group input[type=email],
+    .form-group select { background: var(--input-bg); border: 1px solid var(--border); color: var(--text); padding: 10px 12px; border-radius: 10px; font-size: 14px; }
     .form-group input[type=checkbox] { width: auto; }
     .footer { margin-top: 16px; color: var(--text-dim); font-size: 13px; }
+
+    /* User table */
+    .user-table { width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 12px; }
+    .user-table th { text-align: left; padding: 10px 12px; border-bottom: 2px solid var(--border); color: var(--text-dim); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+    .user-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    .user-table tr:last-child td { border-bottom: none; }
+    .role-badge { display: inline-block; padding: 3px 10px; border-radius: 99px; font-size: 12px; font-weight: 600; }
+    .role-admin      { background: rgba(255,80,80,.15);  color: #ff5050; }
+    .role-supervisor { background: rgba(255,160,50,.15); color: #ffa032; }
+    .role-operator   { background: rgba(80,160,255,.15); color: #50a0ff; }
+    .role-viewer     { background: rgba(120,120,120,.15);color: #888; }
+    .inline-form { display: inline-flex; align-items: center; gap: 6px; }
+    .inline-form select { padding: 6px 10px; border-radius: 8px; font-size: 13px; }
+    .btn-xs { padding: 5px 12px; border-radius: 8px; font-size: 12px; border: none; cursor: pointer; font-weight: 600; }
+    .btn-save   { background: var(--primary); color: #fff; }
+    .btn-danger-xs { background: rgba(255,51,102,.15); color: var(--danger); border: 1px solid var(--danger); }
+
+    /* Add-user form */
+    .add-user-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; align-items: end; }
+    .add-user-grid .form-field label { font-size: 12px; color: var(--text-dim); margin-bottom: 4px; display: block; }
+    .add-user-grid .form-field input,
+    .add-user-grid .form-field select { width: 100%; box-sizing: border-box; }
 </style>
 {% endblock %}
 
@@ -23,7 +48,7 @@
 {% block content %}
     <div class="container">
         <div class="card">
-            <h1>Manage History</h1>
+            <h1>Admin</h1>
             {% with messages = get_flashed_messages(with_categories=true) %}
                 {% if messages %}
                     {% for category, message in messages %}
@@ -31,9 +56,126 @@
                     {% endfor %}
                 {% endif %}
             {% endwith %}
-            <p>Use the controls below to clear device history. You can back up data to CSV before deletion for auditing.</p>
+
+            <!-- ===== USER MANAGEMENT ===== -->
             <div class="admin-section">
-                <h2>Clear by range</h2>
+                <h2>User Accounts</h2>
+
+                <table class="user-table">
+                    <thead>
+                        <tr>
+                            <th>Username</th>
+                            <th>Email</th>
+                            <th>Role</th>
+                            <th>Created</th>
+                            <th>Change Role</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for u in users %}
+                        <tr>
+                            <td>
+                                <strong>{{ u.username }}</strong>
+                                {% if u.id == current_user.id %}<span style="color:var(--text-dim); font-size:12px;"> (you)</span>{% endif %}
+                            </td>
+                            <td style="color:var(--text-dim)">{{ u.email or '—' }}</td>
+                            <td>
+                                <span class="role-badge role-{{ u.role }}">{{ u.role_label }}</span>
+                            </td>
+                            <td style="color:var(--text-dim); font-size:13px;">
+                                {{ u.created_at.strftime('%Y-%m-%d') if u.created_at else '—' }}
+                            </td>
+                            <td>
+                                {% if u.id != current_user.id %}
+                                <form method="POST" action="{{ url_for('admin_change_role', user_id=u.id) }}" class="inline-form">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <select name="role">
+                                        {% for val, label in role_labels.items() %}
+                                        <option value="{{ val }}" {% if u.role == val %}selected{% endif %}>{{ label }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    <button type="submit" class="btn-xs btn-save">Save</button>
+                                </form>
+                                {% else %}
+                                <span style="color:var(--text-dim); font-size:13px;">—</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if u.id != current_user.id and u.username != 'admin' %}
+                                <form method="POST" action="{{ url_for('admin_delete_user', user_id=u.id) }}"
+                                      onsubmit="return confirm('Delete user {{ u.username|e }}?')">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="btn-xs btn-danger-xs">Delete</button>
+                                </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+
+                <h3 style="font-size:15px; font-weight:600; margin:20px 0 12px;">Add New User</h3>
+                <form method="POST" action="{{ url_for('admin_add_user') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="add-user-grid">
+                        <div class="form-field">
+                            <label>Username *</label>
+                            <input type="text" name="username" required placeholder="e.g. john">
+                        </div>
+                        <div class="form-field">
+                            <label>Email</label>
+                            <input type="email" name="email" placeholder="optional">
+                        </div>
+                        <div class="form-field">
+                            <label>Password *</label>
+                            <input type="password" name="password" required placeholder="min 6 chars">
+                        </div>
+                        <div class="form-field">
+                            <label>Confirm Password *</label>
+                            <input type="password" name="confirm_password" required>
+                        </div>
+                        <div class="form-field">
+                            <label>Role *</label>
+                            <select name="role">
+                                {% for val, label in role_labels.items() %}
+                                {% if val != 'admin' %}
+                                <option value="{{ val }}">{{ label }}</option>
+                                {% endif %}
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-field" style="display:flex; align-items:flex-end;">
+                            <button type="submit" class="btn-submit" style="width:100%;">Create User</button>
+                        </div>
+                    </div>
+                    <p style="margin-top:8px; font-size:12px;">
+                        <strong>Viewer</strong> — read-only monitoring. &nbsp;
+                        <strong>Operator</strong> — add &amp; edit devices. &nbsp;
+                        <strong>Supervisor</strong> — full device CRUD (no log delete, no admin page). &nbsp;
+                        <strong>Admin</strong> — unrestricted.
+                    </p>
+                </form>
+            </div>
+
+            <!-- ===== RESET PASSWORD ===== -->
+            <div class="admin-section">
+                <h2>Reset User Password</h2>
+                <p>Reset the password for any account.</p>
+                <form method="post" action="{{ url_for('admin_reset_password') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="form-group">
+                        <label>Username: <input type="text" name="username" required></label>
+                        <label>New Password: <input type="password" name="password" required></label>
+                        <label>Confirm Password: <input type="password" name="confirm_password" required></label>
+                        <button type="submit" class="btn btn-primary">Reset Password</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- ===== HISTORY MANAGEMENT ===== -->
+            <div class="admin-section">
+                <h2>Clear History by Range</h2>
                 <form method="post" action="{{ url_for('admin_clear_history') }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <div class="form-group">
@@ -45,30 +187,29 @@
                 </form>
             </div>
             <div class="admin-section">
-                <h2>Clear all history</h2>
+                <h2>Clear All History</h2>
                 <p>This will remove every history record in the database.</p>
                 <form method="post" action="{{ url_for('admin_clear_history') }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <div class="form-group">
                         <label><input type="checkbox" name="backup" value="1"> Backup to CSV</label>
-                        <button type="submit" class="btn btn-danger" name="action" value="clear_all">Clear All</button>
+                        <button type="submit" class="btn btn-danger" name="action" value="clear_all">Clear All History</button>
                     </div>
                 </form>
             </div>
             <div class="admin-section">
-                <h2>Reset User Password</h2>
-                <p>Reset the password for a user account. This is useful when the admin needs to recover or rotate credentials.</p>
-                <form method="post" action="{{ url_for('admin_reset_password') }}">
+                <h2>Clear Incident Reports</h2>
+                <p>Remove all incident/alert records from the report table.</p>
+                <form method="post" action="{{ url_for('admin_clear_reports') }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <div class="form-group">
-                        <label>Username: <input type="text" name="username" value="admin" required></label>
-                        <label>New Password: <input type="password" name="password" required></label>
-                        <label>Confirm Password: <input type="password" name="confirm_password" required></label>
-                        <button type="submit" class="btn btn-primary">Reset Password</button>
+                        <label><input type="checkbox" name="backup" value="1"> Backup to CSV</label>
+                        <button type="submit" class="btn btn-danger">Clear All Reports</button>
                     </div>
                 </form>
             </div>
-            <div class="footer">Note: time range values are interpreted in the configured app time zone.</div>
+
+            <div class="footer">Time range values are interpreted in the configured app time zone.</div>
         </div>
     </div>
 {% endblock %}

@@ -41,6 +41,87 @@
         align-items: center;
         gap: 6px;
     }
+
+    .filter-bar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 16px;
+        flex-wrap: wrap;
+    }
+
+    .filter-bar label {
+        font-size: 13px;
+        color: var(--text-dim);
+    }
+
+    .filter-bar select {
+        background: var(--input-bg);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 6px 12px;
+        font-size: 13px;
+        cursor: pointer;
+    }
+
+    .severity-badge {
+        padding: 3px 9px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    .severity-warning {
+        color: #f59e0b;
+        background: rgba(245, 158, 11, 0.12);
+        border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+
+    .severity-info {
+        color: #60a5fa;
+        background: rgba(96, 165, 250, 0.10);
+        border: 1px solid rgba(96, 165, 250, 0.25);
+    }
+
+    .severity-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        display: inline-block;
+    }
+
+    .dot-warning { background: #f59e0b; }
+    .dot-info    { background: #60a5fa; }
+
+    .issue-type-badge {
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 13px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .issue-type-warning {
+        color: var(--warning);
+        background: rgba(245, 158, 11, 0.10);
+    }
+
+    .issue-type-info {
+        color: #2563eb;
+        background: rgba(37, 99, 235, 0.10);
+    }
+
+    [data-theme="dark"] .issue-type-info {
+        color: #60a5fa;
+        background: rgba(96, 165, 250, 0.10);
+    }
 </style>
 {% endblock %}
 
@@ -66,22 +147,30 @@
 
         <div class="section">
             {% if incidents %}
-                <div class="result-count" style="margin-bottom: 16px;">
-                    Showing {{ incidents|length }} report(s)
+                <div class="filter-bar">
+                    <label for="severityFilter">Filter by severity:</label>
+                    <select id="severityFilter" onchange="filterBySeverity(this.value)">
+                        <option value="all">All levels</option>
+                        <option value="warning">Warning</option>
+                        <option value="info">Info (suppressed)</option>
+                    </select>
+                    <span id="visibleCount" style="font-size:13px; color: var(--text-dim);"></span>
                 </div>
 
-                <table class="history-table" style="width: 100%; text-align: left; border-collapse: collapse;">
+                <table class="history-table" id="reportsTable" style="width: 100%; text-align: left; border-collapse: collapse;">
                     <thead>
                         <tr>
                             <th style="padding: 12px; border-bottom: 1px solid var(--border);">Date / Time</th>
                             <th style="padding: 12px; border-bottom: 1px solid var(--border);">Device</th>
+                            <th style="padding: 12px; border-bottom: 1px solid var(--border);">Severity</th>
                             <th style="padding: 12px; border-bottom: 1px solid var(--border);">Issue Type</th>
                             <th style="padding: 12px; border-bottom: 1px solid var(--border);">Details</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for incident in incidents %}
-                        <tr>
+                        {% set sev = incident.severity if incident.severity else 'warning' %}
+                        <tr data-severity="{{ sev }}">
                             <td class="timestamp" style="padding: 12px; border-bottom: 1px solid var(--border);">{{ incident.timestamp|format_dt('%Y-%m-%d %H:%M:%S') }}</td>
                             <td style="padding: 12px; border-bottom: 1px solid var(--border);">
                                 <a href="{{ url_for('device_detail', device_id=incident.device.id) }}" class="device-link">
@@ -89,8 +178,18 @@
                                 </a>
                             </td>
                             <td style="padding: 12px; border-bottom: 1px solid var(--border);">
-                                <span class="status-badge" style="color: var(--danger); background: rgba(255, 51, 102, 0.1); padding: 4px 8px; border-radius: 4px; display: inline-flex; align-items: center; gap: 6px;">
-                                    <span class="status-dot" style="background: var(--danger); width: 8px; height: 8px; border-radius: 50%; display: inline-block;"></span>
+                                {% if sev == 'warning' %}
+                                <span class="severity-badge severity-warning">
+                                    <span class="severity-dot dot-warning"></span>Warning
+                                </span>
+                                {% else %}
+                                <span class="severity-badge severity-info">
+                                    <span class="severity-dot dot-info"></span>Info
+                                </span>
+                                {% endif %}
+                            </td>
+                            <td style="padding: 12px; border-bottom: 1px solid var(--border);">
+                                <span class="issue-type-badge issue-type-{{ sev }}">
                                     {{ incident.issue_type }}
                                 </span>
                             </td>
@@ -99,6 +198,24 @@
                         {% endfor %}
                     </tbody>
                 </table>
+
+                <script>
+                    function filterBySeverity(val) {
+                        const rows = document.querySelectorAll('#reportsTable tbody tr');
+                        let visible = 0;
+                        rows.forEach(row => {
+                            const sev = row.dataset.severity;
+                            const show = val === 'all' || sev === val;
+                            row.style.display = show ? '' : 'none';
+                            if (show) visible++;
+                        });
+                        document.getElementById('visibleCount').textContent =
+                            'Showing ' + visible + ' of {{ incidents|length }} report(s)';
+                    }
+                    // Init count
+                    document.getElementById('visibleCount').textContent =
+                        'Showing {{ incidents|length }} of {{ incidents|length }} report(s)';
+                </script>
             {% else %}
                 <div class="empty-state">
                     <div class="empty-state-icon" style="font-size: 48px; margin-bottom: 16px;">✅</div>

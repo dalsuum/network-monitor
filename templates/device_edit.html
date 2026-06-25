@@ -11,7 +11,7 @@
     .form-field input, .form-field select { border-radius: 10px; padding: 12px 14px; }
     .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
     .btn-submit, .btn-cancel { padding: 12px 24px; border: none; border-radius: 10px; cursor: pointer; font-weight: 600; text-decoration: none; }
-    .btn-cancel { background: rgba(255,255,255,0.08); color: var(--text); display: inline-flex; align-items: center; }
+    .btn-cancel { background: var(--btn-surface); border: 1px solid var(--btn-surface-border); color: var(--text); display: inline-flex; align-items: center; }
 </style>
 {% endblock %}
 
@@ -95,6 +95,47 @@
                         <input id="snr_threshold_db" name="snr_threshold_db" type="number" min="1" max="60" value="{{ device.snr_threshold_db or 20 }}">
                     </div>
                 </div>
+
+                <h3 style="margin:24px 0 12px; font-size:16px; font-weight:600; border-top:1px solid var(--border); padding-top:20px;">SSH Credentials &amp; Device Model</h3>
+                <p style="margin:0 0 16px; font-size:13px; color:var(--text-muted);">
+                    Leave blank to use the global <code>AP_USERNAME</code> / <code>AP_PASSWORD</code> from <code>.env</code>.
+                    Set here to override for this device only.
+                </p>
+                <div class="form-row">
+                    <div class="form-field">
+                        <label for="ssh_username">SSH Username</label>
+                        <input id="ssh_username" name="ssh_username" type="text" placeholder="(global default)" value="{{ device.ssh_username or '' }}">
+                    </div>
+                    <div class="form-field">
+                        <label for="ssh_password">SSH Password</label>
+                        <input id="ssh_password" name="ssh_password" type="password" placeholder="(global default)" value="{{ device.ssh_password or '' }}">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-field">
+                        <label for="ssh_port">SSH Port</label>
+                        <input id="ssh_port" name="ssh_port" type="number" min="1" max="65535" placeholder="22" value="{{ device.ssh_port or 22 }}">
+                    </div>
+                    <div class="form-field">
+                        <label for="ap_vendor">Vendor</label>
+                        <select id="ap_vendor" name="ap_vendor">
+                            <option value="" {% if not device.ap_vendor %}selected{% endif %}>(auto-detect from name)</option>
+                            <option value="Cisco" {% if device.ap_vendor == 'Cisco' %}selected{% endif %}>Cisco eWLC (C9800 / IOS-XE)</option>
+                            <option value="Ligowave" {% if device.ap_vendor == 'Ligowave' %}selected{% endif %}>Ligowave / DLB</option>
+                            <option value="Ubiquiti" {% if device.ap_vendor == 'Ubiquiti' %}selected{% endif %}>Ubiquiti / AirMax</option>
+                            <option value="MikroTik" {% if device.ap_vendor == 'MikroTik' %}selected{% endif %}>MikroTik</option>
+                            <option value="Cambium" {% if device.ap_vendor == 'Cambium' %}selected{% endif %}>Cambium / ePMP</option>
+                            <option value="Generic" {% if device.ap_vendor == 'Generic' %}selected{% endif %}>Generic / Other</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row full">
+                    <div class="form-field">
+                        <label for="ap_model">Model</label>
+                        <input id="ap_model" name="ap_model" type="text" placeholder="e.g. DLB APC 5M-90 V3" value="{{ device.ap_model or '' }}">
+                    </div>
+                </div>
+
                 <div class="form-row full">
                     <div class="form-field">
                         <label for="is_monitored">Monitoring</label>

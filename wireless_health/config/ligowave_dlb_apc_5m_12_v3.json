@@ -1,0 +1,33 @@
+{
+  "vendor": "Ligowave",
+  "model": "DLB APC 5M-12 V3",
+  "type": "ptp_directional",
+  "frequency_band": "5GHz",
+  "antenna_gain_dbi": 12,
+  "antenna_beamwidth_deg": 28,
+  "notes": "12 dBi directional panel antenna for PTP or long-range PTMP links. Narrower beamwidth requires more precise alignment.",
+  "scoring_weights": {
+    "signal":          0.25,
+    "snr":             0.25,
+    "noise":           0.20,
+    "signal_balance":  0.10,
+    "tx_power":        0.05,
+    "channel_width":   0.05,
+    "errors":          0.05,
+    "cpu":             0.025,
+    "temperature":     0.025
+  },
+  "expected_rates_mbps": {
+    "20MHz": 150,
+    "40MHz": 300,
+    "80MHz": 433
+  },
+  "ssh_commands": [
+    "uptime",
+    "iwconfig wlan0",
+    "cat /proc/net/wireless",
+    "iw dev wlan0 station dump",
+    "cat /proc/loadavg",
+    "free -m"
+  ]
+}

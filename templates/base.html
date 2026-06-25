@@ -18,6 +18,7 @@
         <div class="nav-links">
             <a href="{{ url_for('dashboard') }}" {% if request.endpoint == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
             <a href="{{ url_for('reports') }}" {% if request.endpoint == 'reports' %}class="active"{% endif %}>Reports</a>
+            <a href="{{ url_for('wireless_health') }}" {% if request.endpoint in ('wireless_health','wireless_device') %}class="active"{% endif %}>Wireless Health</a>
             <a href="{{ url_for('simulator') }}" {% if request.endpoint == 'simulator' %}class="active"{% endif %}>Simulator</a>
             <a href="{{ url_for('history') }}" {% if request.endpoint == 'history' %}class="active"{% endif %}>History</a>
             {% if current_user.is_authenticated and current_user.is_admin %}

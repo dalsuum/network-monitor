@@ -1,0 +1,770 @@
+{% extends "base.html" %}
+{% block title %}Wireless Health{% if single_device %} — {{ single_device.name }}{% endif %} | Network Monitor{% endblock %}
+
+{% block extra_head %}
+<style>
+/* ── Wireless Health Design Tokens ── */
+:root {
+    --wh-green:  #00ff88;
+    --wh-lime:   #b0ff44;
+    --wh-yellow: #ffd93d;
+    --wh-orange: #ff8c42;
+    --wh-red:    #ff3366;
+    --wh-grey:   #8892b0;
+    --card-radius: 12px;
+}
+
+/* ── Page Layout ── */
+.wh-page { max-width: 1400px; margin: 0 auto; padding: 24px 32px; }
+
+/* ── Score Hero Card ── */
+.wh-hero {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--card-radius);
+    padding: 32px;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 32px;
+    align-items: center;
+    margin-bottom: 28px;
+}
+.wh-score-ring {
+    width: 120px; height: 120px;
+    border-radius: 50%;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    border: 4px solid var(--wh-grey);
+    font-family: 'JetBrains Mono', monospace;
+    position: relative;
+}
+.wh-score-ring.color-green  { border-color: var(--wh-green);  color: var(--wh-green); }
+.wh-score-ring.color-lime   { border-color: var(--wh-lime);   color: var(--wh-lime); }
+.wh-score-ring.color-yellow { border-color: var(--wh-yellow); color: var(--wh-yellow); }
+.wh-score-ring.color-orange { border-color: var(--wh-orange); color: var(--wh-orange); }
+.wh-score-ring.color-red    { border-color: var(--wh-red);    color: var(--wh-red); }
+.wh-score-ring.color-grey   { border-color: var(--wh-grey);   color: var(--wh-grey); }
+.wh-score-num  { font-size: 2.2rem; font-weight: 700; line-height: 1; }
+.wh-score-lbl  { font-size: 0.65rem; opacity: 0.7; margin-top: 2px; letter-spacing: 1px; }
+.wh-hero-info h2 { font-size: 1.4rem; font-weight: 600; margin-bottom: 6px; }
+.wh-stars { font-size: 1.6rem; letter-spacing: 2px; margin-bottom: 8px; }
+.wh-stars.color-green  { color: var(--wh-green); }
+.wh-stars.color-lime   { color: var(--wh-lime); }
+.wh-stars.color-yellow { color: var(--wh-yellow); }
+.wh-stars.color-orange { color: var(--wh-orange); }
+.wh-stars.color-red    { color: var(--wh-red); }
+.wh-hero-meta { display: flex; gap: 16px; flex-wrap: wrap; }
+.wh-meta-chip {
+    background: var(--btn-surface);
+    border: 1px solid var(--btn-surface-border);
+    border-radius: 6px; padding: 4px 10px;
+    font-size: 0.78rem; color: var(--text-dim);
+}
+.wh-hero-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.wh-summary-item { text-align: center; }
+.wh-summary-item .val { font-size: 1rem; font-weight: 600; }
+.wh-summary-item .key { font-size: 0.7rem; color: var(--text-dim); margin-top: 2px; }
+
+/* ── Issues + Recommendations ── */
+.wh-issues-bar {
+    background: rgba(255, 51, 102, 0.08);
+    border: 1px solid rgba(255, 51, 102, 0.25);
+    border-radius: var(--card-radius);
+    padding: 16px 20px;
+    margin-bottom: 28px;
+}
+.wh-issues-bar h3 { color: var(--wh-red); font-size: 0.85rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+.wh-issues-bar ul { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.wh-issues-bar li::before { content: '⚠ '; }
+
+.wh-rec-bar {
+    background: rgba(0, 255, 136, 0.05);
+    border: 1px solid rgba(0, 255, 136, 0.15);
+    border-radius: var(--card-radius);
+    padding: 16px 20px;
+    margin-bottom: 28px;
+}
+.wh-rec-bar h3 { color: var(--wh-green); font-size: 0.85rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+.wh-rec-bar ol { padding-left: 20px; display: flex; flex-direction: column; gap: 5px; }
+.wh-rec-bar li { font-size: 0.9rem; }
+
+/* ── Section Headers ── */
+.wh-section-title {
+    font-size: 0.78rem; font-weight: 700; letter-spacing: 1.5px;
+    text-transform: uppercase; color: var(--text-dim);
+    margin-bottom: 16px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+/* ── Metric Cards Grid ── */
+.wh-metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 16px;
+    margin-bottom: 32px;
+}
+.wh-metric-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--card-radius);
+    padding: 18px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.2s, transform 0.15s;
+}
+.wh-metric-card:hover { transform: translateY(-2px); }
+.wh-metric-card.has-issues { border-color: rgba(255,51,102,0.35); }
+
+/* Color accent strip on left */
+.wh-metric-card::before {
+    content: '';
+    position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    border-radius: 12px 0 0 12px;
+}
+.wh-metric-card.color-green::before  { background: var(--wh-green); }
+.wh-metric-card.color-lime::before   { background: var(--wh-lime); }
+.wh-metric-card.color-yellow::before { background: var(--wh-yellow); }
+.wh-metric-card.color-orange::before { background: var(--wh-orange); }
+.wh-metric-card.color-red::before    { background: var(--wh-red); }
+.wh-metric-card.color-grey::before   { background: var(--wh-grey); }
+
+.wh-metric-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
+.wh-metric-name { font-size: 0.75rem; font-weight: 600; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.8px; }
+.wh-quality-badge {
+    font-size: 0.65rem; font-weight: 700; padding: 2px 7px;
+    border-radius: 4px; white-space: nowrap;
+}
+.wh-quality-badge.color-green  { background: rgba(0,255,136,0.15); color: var(--wh-green); }
+.wh-quality-badge.color-lime   { background: rgba(176,255,68,0.15); color: var(--wh-lime); }
+.wh-quality-badge.color-yellow { background: rgba(255,217,61,0.15); color: var(--wh-yellow); }
+.wh-quality-badge.color-orange { background: rgba(255,140,66,0.15); color: var(--wh-orange); }
+.wh-quality-badge.color-red    { background: rgba(255,51,102,0.15); color: var(--wh-red); }
+.wh-quality-badge.color-grey   { background: rgba(136,146,176,0.15); color: var(--wh-grey); }
+
+.wh-metric-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.5rem; font-weight: 700; margin-bottom: 4px;
+}
+.wh-metric-value.color-green  { color: var(--wh-green); }
+.wh-metric-value.color-lime   { color: var(--wh-lime); }
+.wh-metric-value.color-yellow { color: var(--wh-yellow); }
+.wh-metric-value.color-orange { color: var(--wh-orange); }
+.wh-metric-value.color-red    { color: var(--wh-red); }
+.wh-metric-value.color-grey   { color: var(--wh-grey); }
+.wh-metric-unit { font-size: 0.7rem; color: var(--text-dim); margin-left: 4px; font-weight: 400; }
+
+/* Score bar */
+.wh-score-bar-wrap { margin: 10px 0 6px; }
+.wh-score-bar-track {
+    height: 4px; background: var(--track-bg); border-radius: 2px; overflow: hidden;
+}
+.wh-score-bar-fill {
+    height: 100%; border-radius: 2px;
+    transition: width 0.8s cubic-bezier(0.4,0,0.2,1);
+}
+.wh-score-bar-fill.color-green  { background: var(--wh-green); }
+.wh-score-bar-fill.color-lime   { background: var(--wh-lime); }
+.wh-score-bar-fill.color-yellow { background: var(--wh-yellow); }
+.wh-score-bar-fill.color-orange { background: var(--wh-orange); }
+.wh-score-bar-fill.color-red    { background: var(--wh-red); }
+.wh-score-bar-fill.color-grey   { background: var(--wh-grey); }
+.wh-score-bar-label { font-size: 0.68rem; color: var(--text-dim); margin-top: 3px; }
+
+.wh-explanation {
+    font-size: 0.75rem; color: var(--text-dim); line-height: 1.5;
+    margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px;
+}
+.wh-ref-range {
+    font-size: 0.68rem; color: var(--text-dim); font-style: italic; margin-top: 4px;
+}
+
+/* ── Informational-only metrics (uptime, ssid, etc.) ── */
+.wh-info-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px; margin-bottom: 32px;
+}
+.wh-info-chip {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 14px;
+}
+.wh-info-chip .info-key { font-size: 0.68rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.8px; }
+.wh-info-chip .info-val { font-family: 'JetBrains Mono', monospace; font-size: 0.9rem; margin-top: 4px; word-break: break-all; }
+
+/* ── RF Insights ── */
+.wh-insights { display: flex; flex-direction: column; gap: 14px; margin-bottom: 32px; }
+.wh-insight-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid rgba(0,255,136,0.4);
+    border-radius: var(--card-radius);
+    padding: 16px 20px;
+}
+.wh-insight-topic { font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 1px; color: var(--primary); margin-bottom: 4px; }
+.wh-insight-title { font-weight: 600; margin-bottom: 8px; }
+.wh-insight-body { font-size: 0.85rem; color: var(--text-dim); line-height: 1.7; }
+
+/* ── Fleet Table ── */
+.wh-fleet-controls {
+    display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; align-items: center;
+}
+.wh-fleet-controls input, .wh-fleet-controls select {
+    background: var(--input-bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 12px; color: var(--text);
+    font-family: 'Outfit', sans-serif; font-size: 0.85rem; outline: none;
+}
+.wh-fleet-controls input { flex: 1; min-width: 180px; }
+.wh-fleet-table-wrap { overflow-x: auto; border-radius: var(--card-radius); }
+.wh-fleet-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+.wh-fleet-table th {
+    background: var(--surface); border-bottom: 2px solid var(--border);
+    padding: 10px 14px; text-align: left;
+    font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--text-dim); cursor: pointer; user-select: none; white-space: nowrap;
+}
+.wh-fleet-table th:hover { color: var(--text); }
+.wh-fleet-table td { padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.wh-fleet-table tr:hover td { background: var(--row-hover); }
+.wh-fleet-table tr.critical-row td { background: rgba(255,51,102,0.04); }
+
+.health-score-cell {
+    font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 1rem;
+}
+.dbm-cell { font-family: 'JetBrains Mono', monospace; }
+.status-pill {
+    padding: 3px 10px; border-radius: 12px; font-size: 0.72rem; font-weight: 700;
+    white-space: nowrap;
+}
+.status-pill.color-green  { background: rgba(0,255,136,0.15); color: var(--wh-green); }
+.status-pill.color-lime   { background: rgba(176,255,68,0.15); color: var(--wh-lime); }
+.status-pill.color-yellow { background: rgba(255,217,61,0.15); color: var(--wh-yellow); }
+.status-pill.color-orange { background: rgba(255,140,66,0.15); color: var(--wh-orange); }
+.status-pill.color-red    { background: rgba(255,51,102,0.15); color: var(--wh-red); }
+.status-pill.color-grey   { background: rgba(136,146,176,0.15); color: var(--wh-grey); }
+
+/* Color dots */
+.wh-dot {
+    display: inline-block; width: 8px; height: 8px;
+    border-radius: 50%; margin-right: 6px;
+}
+.wh-dot.color-green  { background: var(--wh-green); box-shadow: 0 0 6px var(--wh-green); }
+.wh-dot.color-lime   { background: var(--wh-lime); }
+.wh-dot.color-yellow { background: var(--wh-yellow); }
+.wh-dot.color-orange { background: var(--wh-orange); }
+.wh-dot.color-red    { background: var(--wh-red); box-shadow: 0 0 6px var(--wh-red); }
+.wh-dot.color-grey   { background: var(--wh-grey); }
+
+/* Refresh button */
+.wh-refresh-btn {
+    background: var(--btn-surface); border: 1px solid var(--btn-surface-border);
+    border-radius: 8px; padding: 8px 16px; color: var(--text);
+    font-family: 'Outfit', sans-serif; font-size: 0.85rem;
+    cursor: pointer; transition: background 0.15s;
+    display: flex; align-items: center; gap: 6px;
+}
+.wh-refresh-btn:hover { background: var(--btn-surface-hover); }
+.wh-analyze-btn {
+    background: rgba(0,255,136,0.1); border: 1px solid rgba(0,255,136,0.25);
+    border-radius: 8px; padding: 8px 16px; color: var(--wh-green);
+    font-family: 'Outfit', sans-serif; font-size: 0.85rem;
+    cursor: pointer; transition: background 0.15s; text-decoration: none;
+    display: inline-flex; align-items: center; gap: 6px;
+}
+.wh-analyze-btn:hover { background: rgba(0,255,136,0.18); }
+
+/* No-data state */
+.wh-no-data {
+    text-align: center; padding: 60px 20px; color: var(--text-dim);
+}
+.wh-no-data .icon { font-size: 3rem; margin-bottom: 12px; }
+.wh-no-data p { max-width: 480px; margin: 0 auto; line-height: 1.7; }
+
+/* Tabs */
+.wh-tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--border); }
+.wh-tab {
+    padding: 8px 18px; font-size: 0.85rem; cursor: pointer;
+    border-bottom: 2px solid transparent; color: var(--text-dim);
+    transition: color 0.15s; background: none; border-top: none; border-left: none; border-right: none;
+    font-family: 'Outfit', sans-serif;
+}
+.wh-tab.active, .wh-tab:hover { color: var(--text); }
+.wh-tab.active { border-bottom-color: var(--primary); }
+.wh-tab-panel { display: none; }
+.wh-tab-panel.active { display: block; }
+
+/* Responsive */
+@media (max-width: 768px) {
+    .wh-hero { grid-template-columns: 1fr; }
+    .wh-hero-summary { grid-template-columns: repeat(2, 1fr); }
+    .wh-page { padding: 16px; }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="wh-page">
+
+{% if single_device and analysis %}
+{# ═══════════════════════════════════════════════════════
+   SINGLE-DEVICE VIEW
+═══════════════════════════════════════════════════════ #}
+
+<!-- Hero Score Card -->
+<div class="wh-hero">
+    <div class="wh-score-ring color-{{ analysis.health_color }}">
+        <span class="wh-score-num">{{ analysis.overall_score | round(0) | int }}</span>
+        <span class="wh-score-lbl">/ 100</span>
+    </div>
+    <div class="wh-hero-info">
+        <div class="wh-stars color-{{ analysis.health_color }}">{{ analysis.star_rating }}</div>
+        <h2>{{ analysis.health_classification }} — {{ analysis.device_name }}</h2>
+        <div class="wh-hero-meta">
+            <span class="wh-meta-chip">{{ analysis.vendor }} {{ analysis.model }}</span>
+            <span class="wh-meta-chip">{{ analysis.ip_address }}</span>
+            {% if analysis.site %}<span class="wh-meta-chip">{{ analysis.site }}</span>{% endif %}
+            <span class="wh-meta-chip">Updated: {{ last_updated or analysis.timestamp }}</span>
+        </div>
+    </div>
+    <div class="wh-hero-summary">
+        {% for key, val in analysis.summary.items() %}
+        <div class="wh-summary-item">
+            <div class="val">{{ val }}</div>
+            <div class="key">{{ key }}</div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Issues -->
+{% if analysis.key_issues %}
+<div class="wh-issues-bar">
+    <h3>Active Issues ({{ analysis.key_issues | length }})</h3>
+    <ul>
+        {% for issue in analysis.key_issues %}
+        <li>{{ issue }}</li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+<!-- Recommendations -->
+{% if analysis.recommendations %}
+<div class="wh-rec-bar">
+    <h3>Recommended Actions</h3>
+    <ol>
+        {% for rec in analysis.recommendations %}
+        <li>{{ rec }}</li>
+        {% endfor %}
+    </ol>
+</div>
+{% endif %}
+
+<!-- Tabs: Metrics / RF Insights -->
+<div class="wh-tabs">
+    <button class="wh-tab active" onclick="switchTab(event,'tab-metrics')">RF Metrics</button>
+    <button class="wh-tab" onclick="switchTab(event,'tab-insights')">RF Insights</button>
+    <button class="wh-tab" onclick="switchTab(event,'tab-info')">Link Info</button>
+</div>
+
+<!-- RF Metrics Panel -->
+<div id="tab-metrics" class="wh-tab-panel active">
+    <div class="wh-section-title">Signal & Noise</div>
+    <div class="wh-metrics-grid">
+    {% set signal_keys = ['signal','signal_aux','signal_balance','snr','snr_aux','noise'] %}
+    {% for key in signal_keys %}
+        {% set m = analysis.metrics.get(key) %}
+        {% if m and m.value is not none %}
+        <div class="wh-metric-card color-{{ m.color }}{% if m.issues %} has-issues{% endif %}">
+            <div class="wh-metric-header">
+                <span class="wh-metric-name">{{ m.display_name }}</span>
+                <span class="wh-quality-badge color-{{ m.color }}">{{ m.quality }}</span>
+            </div>
+            <div class="wh-metric-value color-{{ m.color }}">
+                {{ m.value }}<span class="wh-metric-unit">{{ m.unit }}</span>
+            </div>
+            <div class="wh-score-bar-wrap">
+                <div class="wh-score-bar-track">
+                    <div class="wh-score-bar-fill color-{{ m.color }}"
+                         style="width:{{ m.score }}%"></div>
+                </div>
+                <div class="wh-score-bar-label">Score: {{ m.score }}/100</div>
+            </div>
+            <div class="wh-explanation">{{ m.explanation }}</div>
+            {% if m.reference_range %}
+            <div class="wh-ref-range">{{ m.reference_range }}</div>
+            {% endif %}
+        </div>
+        {% endif %}
+    {% endfor %}
+    </div>
+
+    <div class="wh-section-title">Radio & Channel</div>
+    <div class="wh-metrics-grid">
+    {% set radio_keys = ['ccq','mcs','data_rate','tx_power','channel_width','frequency'] %}
+    {% for key in radio_keys %}
+        {% set m = analysis.metrics.get(key) %}
+        {% if m and m.value is not none %}
+        <div class="wh-metric-card color-{{ m.color }}{% if m.issues %} has-issues{% endif %}">
+            <div class="wh-metric-header">
+                <span class="wh-metric-name">{{ m.display_name }}</span>
+                <span class="wh-quality-badge color-{{ m.color }}">{{ m.quality }}</span>
+            </div>
+            <div class="wh-metric-value color-{{ m.color }}">
+                {{ m.value }}<span class="wh-metric-unit">{{ m.unit }}</span>
+            </div>
+            <div class="wh-score-bar-wrap">
+                <div class="wh-score-bar-track">
+                    <div class="wh-score-bar-fill color-{{ m.color }}"
+                         style="width:{{ m.score }}%"></div>
+                </div>
+                <div class="wh-score-bar-label">Score: {{ m.score }}/100</div>
+            </div>
+            <div class="wh-explanation">{{ m.explanation }}</div>
+        </div>
+        {% endif %}
+    {% endfor %}
+    </div>
+
+    <div class="wh-section-title">System Health</div>
+    <div class="wh-metrics-grid">
+    {% set sys_keys = ['cpu','temperature','errors'] %}
+    {% for key in sys_keys %}
+        {% set m = analysis.metrics.get(key) %}
+        {% if m and m.value is not none %}
+        <div class="wh-metric-card color-{{ m.color }}{% if m.issues %} has-issues{% endif %}">
+            <div class="wh-metric-header">
+                <span class="wh-metric-name">{{ m.display_name }}</span>
+                <span class="wh-quality-badge color-{{ m.color }}">{{ m.quality }}</span>
+            </div>
+            <div class="wh-metric-value color-{{ m.color }}">
+                {{ m.value }}<span class="wh-metric-unit">{{ m.unit }}</span>
+            </div>
+            <div class="wh-score-bar-wrap">
+                <div class="wh-score-bar-track">
+                    <div class="wh-score-bar-fill color-{{ m.color }}"
+                         style="width:{{ m.score }}%"></div>
+                </div>
+                <div class="wh-score-bar-label">Score: {{ m.score }}/100</div>
+            </div>
+            <div class="wh-explanation">{{ m.explanation }}</div>
+        </div>
+        {% endif %}
+    {% endfor %}
+    </div>
+</div>
+
+<!-- RF Insights Panel -->
+<div id="tab-insights" class="wh-tab-panel">
+    <div class="wh-section-title">RF Engineering Reference</div>
+    <div class="wh-insights">
+    {% for insight in analysis.rf_insights %}
+        <div class="wh-insight-card">
+            <div class="wh-insight-topic">{{ insight.topic }}</div>
+            <div class="wh-insight-title">{{ insight.title }}</div>
+            <div class="wh-insight-body">{{ insight.body }}</div>
+        </div>
+    {% endfor %}
+    {% if not analysis.rf_insights %}
+        <p style="color:var(--text-dim)">No specific RF insights for this link.</p>
+    {% endif %}
+    </div>
+</div>
+
+<!-- Link Info Panel -->
+<div id="tab-info" class="wh-tab-panel">
+    <div class="wh-section-title">Link Information</div>
+    <div class="wh-info-grid">
+    {% set info_keys = ['uptime','ssid','peer_mac','wireless_mode'] %}
+    {% for key in info_keys %}
+        {% set m = analysis.metrics.get(key) %}
+        {% if m and m.value is not none %}
+        <div class="wh-info-chip">
+            <div class="info-key">{{ m.display_name }}</div>
+            <div class="info-val">{{ m.value }}</div>
+        </div>
+        {% endif %}
+    {% endfor %}
+    <div class="wh-info-chip">
+        <div class="info-key">Vendor / Model</div>
+        <div class="info-val">{{ analysis.vendor }} {{ analysis.model or '—' }}</div>
+    </div>
+    <div class="wh-info-chip">
+        <div class="info-key">Analysis Time</div>
+        <div class="info-val">{{ last_updated or analysis.timestamp }}</div>
+    </div>
+    </div>
+</div>
+
+{% elif single_device and not analysis %}
+{# Device exists but no analysis data yet #}
+<div class="wh-no-data">
+    <div class="icon">📡</div>
+    <h2>No Wireless Analysis Available</h2>
+    <p>
+        No wireless health data has been collected for <strong>{{ single_device.name }}</strong> yet.
+        Ensure this device has <code>monitor_profile = wireless_ap</code> and that
+        <code>AP_USERNAME</code> / <code>AP_PASSWORD</code> are configured.
+        You can also trigger an on-demand analysis:
+    </p>
+    <br>
+    <a href="/api/wireless/analyze/{{ single_device.id }}" class="wh-analyze-btn">
+        ⚡ Run Analysis Now
+    </a>
+</div>
+
+{% else %}
+{# ═══════════════════════════════════════════════════════
+   FLEET DASHBOARD VIEW
+═══════════════════════════════════════════════════════ #}
+
+<!-- Fleet Header -->
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
+    <div>
+        <h1 style="font-size:1.5rem; font-weight:700; margin-bottom:4px;">Wireless Link Health</h1>
+        <p style="color:var(--text-dim); font-size:0.88rem;">
+            Fleet analysis for {{ fleet | length }} wireless device{{ 's' if fleet | length != 1 }}.
+            Sorted by health score — critical links first.
+        </p>
+    </div>
+    <button class="wh-refresh-btn" onclick="refreshFleet()">
+        <span id="refresh-icon">⟳</span> Refresh All
+    </button>
+</div>
+
+<!-- Fleet Controls -->
+<div class="wh-fleet-controls">
+    <input type="text" id="fleet-search" placeholder="Search device name or site..." oninput="filterFleet()">
+    <select id="fleet-vendor" onchange="filterFleet()">
+        <option value="">All Vendors</option>
+        {% for v in all_vendors %}
+        <option value="{{ v }}">{{ v }}</option>
+        {% endfor %}
+    </select>
+    <select id="fleet-status" onchange="filterFleet()">
+        <option value="">All Status</option>
+        <option value="Critical">Critical</option>
+        <option value="Poor">Poor</option>
+        <option value="Fair">Fair</option>
+        <option value="Good">Good</option>
+        <option value="Very Good">Very Good</option>
+        <option value="Excellent">Excellent</option>
+    </select>
+</div>
+
+{% if fleet %}
+<!-- Fleet Table -->
+<div class="wh-fleet-table-wrap">
+<table class="wh-fleet-table" id="fleet-table">
+    <thead>
+        <tr>
+            <th onclick="sortFleet('name')">Device ↕</th>
+            <th onclick="sortFleet('site')">Site ↕</th>
+            <th onclick="sortFleet('vendor')">Vendor/Model ↕</th>
+            <th onclick="sortFleet('signal')">Signal ↕</th>
+            <th onclick="sortFleet('snr')">SNR ↕</th>
+            <th onclick="sortFleet('noise')">Noise ↕</th>
+            <th onclick="sortFleet('score')">Health ↕</th>
+            <th>Status</th>
+            <th>Updated</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody id="fleet-tbody">
+    {% for row in fleet %}
+    {% set a = row.analysis %}
+    {% set color = row.health_color %}
+    <tr class="fleet-row{% if color == 'red' %} critical-row{% endif %}"
+        data-name="{{ row.device.name | lower }}"
+        data-site="{{ (row.device.site or '') | lower }}"
+        data-vendor="{{ (a.vendor if a else '') | lower }}"
+        data-status="{{ row.classification | lower }}"
+        data-score="{{ row.score or 0 }}">
+        <td>
+            <span class="wh-dot color-{{ color }}"></span>
+            <a href="{{ url_for('wireless_device', device_id=row.device.id) }}"
+               style="color:var(--text); text-decoration:none; font-weight:500;">
+                {{ row.device.name }}
+            </a>
+            <div style="font-size:0.72rem; color:var(--text-dim);">{{ row.device.ip_address }}</div>
+        </td>
+        <td style="color:var(--text-dim); font-size:0.85rem;">{{ row.device.site or '—' }}</td>
+        <td style="font-size:0.82rem; color:var(--text-dim);">
+            {% if a %}{{ a.vendor }}<br><span style="font-size:0.72rem;">{{ a.model or '—' }}</span>{% else %}—{% endif %}
+        </td>
+        <td class="dbm-cell" style="color:{% if a and a.metrics.signal %}var(--wh-{{ a.metrics.signal.color }}){% else %}var(--text-dim){% endif %};">
+            {% if a and a.metrics.signal and a.metrics.signal.value is not none %}
+            {{ a.metrics.signal.value }} dBm
+            {% else %}—{% endif %}
+        </td>
+        <td class="dbm-cell" style="color:{% if a and a.metrics.snr %}var(--wh-{{ a.metrics.snr.color }}){% else %}var(--text-dim){% endif %};">
+            {% if a and a.metrics.snr and a.metrics.snr.value is not none %}
+            {{ a.metrics.snr.value }} dB
+            {% else %}—{% endif %}
+        </td>
+        <td class="dbm-cell" style="color:{% if a and a.metrics.noise %}var(--wh-{{ a.metrics.noise.color }}){% else %}var(--text-dim){% endif %};">
+            {% if a and a.metrics.noise and a.metrics.noise.value is not none %}
+            {{ a.metrics.noise.value }} dBm
+            {% else %}—{% endif %}
+        </td>
+        <td>
+            {% if row.score is not none %}
+            <span class="health-score-cell color-{{ color }}"
+                  style="color:var(--wh-{{ color }});">
+                {{ row.score | round(0) | int }}
+            </span>
+            <div style="font-size:0.7rem; color:var(--text-dim);">{{ row.star_rating }}</div>
+            {% else %}
+            <span style="color:var(--text-dim);">—</span>
+            {% endif %}
+        </td>
+        <td>
+            <span class="status-pill color-{{ color }}">{{ row.classification }}</span>
+        </td>
+        <td style="font-size:0.78rem; color:var(--text-dim); white-space:nowrap;">
+            {{ row.timestamp or '—' }}
+        </td>
+        <td>
+            <a href="{{ url_for('wireless_device', device_id=row.device.id) }}"
+               class="wh-analyze-btn" style="padding:5px 10px; font-size:0.75rem;">
+                View
+            </a>
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<!-- Fleet Stats Row -->
+<div style="display:flex; gap:20px; margin-top:20px; flex-wrap:wrap;">
+{% set with_data = fleet | selectattr('score', 'ne', none) | list %}
+{% if with_data %}
+{% set critical = with_data | selectattr('health_color', 'equalto', 'red') | list %}
+{% set poor     = with_data | selectattr('classification', 'equalto', 'Poor') | list %}
+{% set good     = with_data | selectattr('health_color', 'in', ['green','lime']) | list %}
+<div class="wh-info-chip" style="flex:1; min-width:120px;">
+    <div class="info-key">Devices Analyzed</div>
+    <div class="info-val" style="color:var(--text);">{{ with_data | length }} / {{ fleet | length }}</div>
+</div>
+<div class="wh-info-chip" style="flex:1; min-width:120px;">
+    <div class="info-key">Critical / Poor</div>
+    <div class="info-val" style="color:var(--wh-red);">{{ critical | length + poor | length }}</div>
+</div>
+<div class="wh-info-chip" style="flex:1; min-width:120px;">
+    <div class="info-key">Healthy</div>
+    <div class="info-val" style="color:var(--wh-green);">{{ good | length }}</div>
+</div>
+{% if with_data %}
+{% set avg_score = (with_data | map(attribute='score') | sum) / (with_data | length) %}
+<div class="wh-info-chip" style="flex:1; min-width:120px;">
+    <div class="info-key">Fleet Avg Score</div>
+    <div class="info-val">{{ avg_score | round(1) }}</div>
+</div>
+{% endif %}
+{% endif %}
+</div>
+
+{% else %}
+<!-- No wireless devices -->
+<div class="wh-no-data">
+    <div class="icon">📡</div>
+    <h2>No Wireless Devices Found</h2>
+    <p>
+        Add devices with <strong>device_type = ap</strong> or <strong>outdoor_ap</strong>,
+        or set <strong>monitor_profile = wireless_ap</strong> on existing devices.
+        Then configure <code>AP_USERNAME</code> and <code>AP_PASSWORD</code> in your
+        <code>.env</code> file to enable SSH-based wireless health collection.
+    </p>
+</div>
+{% endif %}
+
+{% endif %}
+</div>
+
+<script>
+/* ── Tab switching ── */
+function switchTab(event, tabId) {
+    document.querySelectorAll('.wh-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.wh-tab-panel').forEach(p => p.classList.remove('active'));
+    event.target.classList.add('active');
+    document.getElementById(tabId).classList.add('active');
+}
+
+/* ── Fleet filter ── */
+function filterFleet() {
+    const search = document.getElementById('fleet-search')?.value.toLowerCase() || '';
+    const vendor = document.getElementById('fleet-vendor')?.value.toLowerCase() || '';
+    const status = document.getElementById('fleet-status')?.value.toLowerCase() || '';
+    document.querySelectorAll('#fleet-tbody .fleet-row').forEach(row => {
+        const name   = row.dataset.name || '';
+        const site   = row.dataset.site || '';
+        const vend   = row.dataset.vendor || '';
+        const stat   = row.dataset.status || '';
+        const matchSearch = !search || name.includes(search) || site.includes(search);
+        const matchVendor = !vendor || vend.includes(vendor);
+        const matchStatus = !status || stat.includes(status);
+        row.style.display = (matchSearch && matchVendor && matchStatus) ? '' : 'none';
+    });
+}
+
+/* ── Fleet sort ── */
+let _sortDir = {};
+function sortFleet(field) {
+    _sortDir[field] = !_sortDir[field];
+    const asc = _sortDir[field];
+    const tbody = document.getElementById('fleet-tbody');
+    if (!tbody) return;
+    const rows = Array.from(tbody.querySelectorAll('.fleet-row'));
+    rows.sort((a, b) => {
+        let av, bv;
+        if (field === 'score') {
+            av = parseFloat(a.dataset.score) || 0;
+            bv = parseFloat(b.dataset.score) || 0;
+        } else if (field === 'signal' || field === 'snr' || field === 'noise') {
+            const colIndex = {'signal': 4, 'snr': 5, 'noise': 6}[field];
+            av = parseFloat(a.querySelector('td:nth-child(' + colIndex + ')')?.textContent) || 0;
+            bv = parseFloat(b.querySelector('td:nth-child(' + colIndex + ')')?.textContent) || 0;
+        } else {
+            av = (a.dataset[field] || '').toLowerCase();
+            bv = (b.dataset[field] || '').toLowerCase();
+        }
+        if (av < bv) return asc ? -1 : 1;
+        if (av > bv) return asc ? 1 : -1;
+        return 0;
+    });
+    rows.forEach(r => tbody.appendChild(r));
+}
+
+/* ── Refresh fleet ── */
+async function refreshFleet() {
+    const btn = document.querySelector('.wh-refresh-btn');
+    const icon = document.getElementById('refresh-icon');
+    if (btn) btn.disabled = true;
+    if (icon) { icon.style.display = 'inline-block'; icon.style.animation = 'spin 0.8s linear infinite'; }
+
+    try {
+        const resp = await fetch('/api/wireless/fleet', { credentials: 'same-origin' });
+        if (resp.ok) { window.location.reload(); }
+    } catch(e) { console.error(e); }
+    if (btn) btn.disabled = false;
+}
+
+/* ── Animate score bars on load ── */
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.wh-score-bar-fill').forEach(bar => {
+        const w = bar.style.width;
+        bar.style.width = '0';
+        requestAnimationFrame(() => { bar.style.width = w; });
+    });
+});
+</script>
+
+<style>
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+</style>
+{% endblock %}

@@ -1,0 +1,21 @@
+{
+  "vendor": "Cisco",
+  "model": "eWLC",
+  "type": "wlan_controller",
+  "frequency_band": "dual",
+  "notes": "Cisco IOS-XE Embedded Wireless LAN Controller (C9800 series and equivalent). Health is scored on fleet-level AP join ratio (ccq), average SNR across managed APs, channel utilization, and TX power.",
+  "scoring_weights": {
+    "ccq":          0.40,
+    "snr":          0.30,
+    "errors":       0.15,
+    "tx_power":     0.10,
+    "cpu":          0.05
+  },
+  "ssh_commands": [
+    "show version",
+    "show ap summary",
+    "show ap dot11 5ghz summary",
+    "show ap dot11 24ghz summary",
+    "show wireless client summary"
+  ]
+}

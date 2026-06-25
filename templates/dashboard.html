@@ -176,7 +176,9 @@
                 <h2 class="section-title">Monitored Devices</h2>
                 <div style="display: flex; gap: 12px; align-items: center;">
                     <button class="btn-refresh" onclick="location.reload()">Refresh</button>
+                    {% if current_user.role in ('admin', 'supervisor', 'operator') %}
                     <button class="btn-add" onclick="toggleAddForm()">+ Add Device</button>
+                    {% endif %}
                     <a class="btn-refresh" href="{{ url_for('export_page') }}" style="margin-left:12px; display:inline-flex; align-items:center;">Export</a>
                 </div>
             </div>
@@ -224,15 +226,15 @@
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="form-field">
                     <label>Device Name</label>
-                    <input type="text" name="name" placeholder="e.g., Switch A5" required>
+                    <input type="text" name="name" id="addName" placeholder="e.g., Switch A5" required>
                 </div>
                 <div class="form-field">
                     <label>IP Address</label>
-                    <input type="text" name="ip" placeholder="e.g., example-device-ip" pattern="^(\d{1,3}\.){3}\d{1,3}$" required>
+                    <input type="text" name="ip" id="addIp" placeholder="e.g., 192.168.1.1" pattern="^(\d{1,3}\.){3}\d{1,3}$" required>
                 </div>
                 <div class="form-field">
                     <label>Type</label>
-                    <select name="device_type">
+                    <select name="device_type" id="addType">
                         <option value="router">Router</option>
                         <option value="switch">Switch</option>
                         <option value="ap">Access Point</option>
@@ -243,7 +245,7 @@
                 </div>
                 <div class="form-field">
                     <label>Site</label>
-                    <input type="text" name="site" placeholder="e.g., Main Office" list="site-list">
+                    <input type="text" name="site" id="addSite" placeholder="e.g., Main Office" list="site-list">
                     <datalist id="site-list">
                         {% for site in all_sites %}
                         <option value="{{ site }}">
@@ -252,7 +254,7 @@
                 </div>
                 <div class="form-field">
                     <label>Zone</label>
-                    <input type="text" name="zone" placeholder="e.g., Zone A" list="zone-list">
+                    <input type="text" name="zone" id="addZone" placeholder="e.g., Zone A" list="zone-list">
                     <datalist id="zone-list">
                         {% for zone in all_zones %}
                         <option value="{{ zone }}">
@@ -261,11 +263,11 @@
                 </div>
                 <div class="form-field">
                     <label>Location</label>
-                    <input type="text" name="location" placeholder="e.g., Room A5">
+                    <input type="text" name="location" id="addLocation" placeholder="e.g., Room A5">
                 </div>
                 <div class="form-field">
                     <label>Profile</label>
-                    <select name="monitor_profile">
+                    <select name="monitor_profile" id="addProfile">
                         <option value="ping">Ping Only</option>
                         <option value="wireless_ap">Wireless AP</option>
                     </select>
@@ -334,11 +336,15 @@
                                 <td><span class="wireless-info">{{ device.wireless_info or '-' }}</span></td>
                                 <td>
                                     <div class="row-actions">
+                                    {% if current_user.role in ('admin', 'supervisor', 'operator') %}
                                     <a class="btn-add table-action" href="{{ url_for('edit_device', device_id=device.id) }}">Edit</a>
+                                    {% endif %}
+                                    {% if current_user.role in ('admin', 'supervisor') %}
                                     <form method="POST" action="{{ url_for('delete_device', device_id=device.id) }}">
                                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                         <button type="submit" class="btn-delete table-action" onclick="return confirm('Delete {{ device.name }}?')">Delete</button>
                                     </form>
+                                    {% endif %}
                                     </div>
                                 </td>
                                 <td>
@@ -349,7 +355,7 @@
                                         <button class="btn-refresh table-action" type="submit">SSH</button>
                                     </form>
                                     <a class="btn-refresh table-action" href="{{ url_for('https_device', device_id=device.id) }}" target="_blank" rel="noopener">URL Login</a>
-                                    <button class="btn-refresh table-action" onclick="openPingModal({{ device.id }}, '{{ device.name|e }}', '{{ device.ip_address|e }}')">Ping</button>
+                                    <button class="btn-refresh table-action" type="button" onclick="openPingModal(event, {{ device.id }}, '{{ device.name|e }}', '{{ device.ip_address|e }}')">Ping</button>
                                     </div>
                                 </td>
                             </tr>
@@ -387,13 +393,56 @@
 {% block extra_scripts %}
     <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
     <script>
+        // Last-device seed for pre-filling the Add form
+        const _lastDevice = {{ last_device_data | tojson if last_device_data else 'null' }};
+
+        function _nextDeviceName(name) {
+            // Finds the last run of digits and increments it, preserving zero-padding.
+            // "AP-Zone1-05" → "AP-Zone1-06",  "Switch A5" → "Switch A6"
+            const m = name.match(/^(.*\D|)(\d+)(\D*)$/);
+            if (!m) return name;
+            const prefix = m[1], numStr = m[2], suffix = m[3];
+            const next = String(parseInt(numStr, 10) + 1).padStart(numStr.length, '0');
+            return prefix + next + suffix;
+        }
+
+        function _prefillAddForm() {
+            if (!_lastDevice) return;
+            const f = document.getElementById('addForm');
+            // Name: auto-increment trailing number from last device
+            const nameEl = f.querySelector('#addName');
+            if (nameEl) nameEl.value = _nextDeviceName(_lastDevice.name);
+            // IP stays blank — each device is unique
+            const ipEl = f.querySelector('#addIp');
+            if (ipEl) ipEl.value = '';
+            // Copy type, site, zone, location, profile from last device
+            const siteEl = f.querySelector('#addSite');
+            if (siteEl) siteEl.value = _lastDevice.site || '';
+            const zoneEl = f.querySelector('#addZone');
+            if (zoneEl) zoneEl.value = _lastDevice.zone || '';
+            const locEl = f.querySelector('#addLocation');
+            if (locEl) locEl.value = _lastDevice.location || '';
+            const typeEl = f.querySelector('#addType');
+            if (typeEl) typeEl.value = _lastDevice.device_type || 'other';
+            const profEl = f.querySelector('#addProfile');
+            if (profEl) profEl.value = _lastDevice.monitor_profile || 'ping';
+        }
+
         function toggleAddForm() {
             const form = document.getElementById('addForm');
+            const opening = !form.classList.contains('active');
             form.classList.toggle('active');
+            if (opening) {
+                _prefillAddForm();
+                // Focus the IP field since name is pre-filled
+                const ip = form.querySelector('#addIp');
+                if (ip) setTimeout(() => ip.focus(), 50);
+            }
         }
 
         // Ping modal
-        function openPingModal(deviceId, name, ip) {
+        function openPingModal(event, deviceId, name, ip) {
+            event.stopPropagation();
             const modal = document.getElementById('pingModal');
             document.getElementById('pingModalSub').textContent = name + ' — ' + ip;
             document.getElementById('pingSpinner').style.display = 'block';

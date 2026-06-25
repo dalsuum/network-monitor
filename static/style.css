@@ -19,6 +19,12 @@
     --success: #00ff88;
     --danger: #ff3366;
     --warning: #ffd93d;
+    /* theme-aware glass surfaces */
+    --btn-surface: rgba(255, 255, 255, 0.06);
+    --btn-surface-border: rgba(255, 255, 255, 0.12);
+    --btn-surface-hover: rgba(255, 255, 255, 0.11);
+    --row-hover: rgba(255, 255, 255, 0.02);
+    --track-bg: rgba(255, 255, 255, 0.05);
 }
 
 [data-theme="light"] {
@@ -35,6 +41,12 @@
     --success: #2f9e44;
     --danger: #c92a2a;
     --warning: #e67700;
+    /* theme-aware glass surfaces */
+    --btn-surface: rgba(15, 23, 42, 0.07);
+    --btn-surface-border: rgba(15, 23, 42, 0.15);
+    --btn-surface-hover: rgba(15, 23, 42, 0.12);
+    --row-hover: rgba(15, 23, 42, 0.04);
+    --track-bg: rgba(15, 23, 42, 0.08);
 }
 
 /* ---------- Reset ---------- */
@@ -113,8 +125,8 @@ body {
 .nav-links button {
     padding: 8px 14px;
     border-radius: 8px;
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: var(--btn-surface);
+    border: 1px solid var(--btn-surface-border);
     color: var(--text);
     cursor: pointer;
     font-size: 14px;
@@ -171,7 +183,7 @@ body {
 
 .btn-refresh {
     padding: 10px 20px;
-    background: rgba(255, 255, 255, 0.05);
+    background: var(--btn-surface);
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -183,7 +195,7 @@ body {
 }
 
 .btn-refresh:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--btn-surface-hover);
     border-color: var(--primary);
 }
 
@@ -218,7 +230,7 @@ body {
     align-items: center;
     gap: 8px;
     padding: 10px 20px;
-    background: rgba(255, 255, 255, 0.05);
+    background: var(--btn-surface);
     border: 1px solid var(--border);
     color: var(--text);
     text-decoration: none;
@@ -229,7 +241,7 @@ body {
 }
 
 .btn-back:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--btn-surface-hover);
     border-color: var(--primary);
 }
 
@@ -274,7 +286,8 @@ body {
 }
 
 .btn-secondary {
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--btn-surface);
+    border: 1px solid var(--btn-surface-border);
     color: var(--text);
 }
 
@@ -507,7 +520,7 @@ body {
 .devices-table td,
 .history-table td {
     padding: 16px 12px;
-    border-bottom: 1px solid rgba(26, 35, 50, 0.5);
+    border-bottom: 1px solid var(--border);
 }
 
 .devices-table tr,
@@ -517,7 +530,7 @@ body {
 
 .devices-table tr:hover,
 .history-table tr:hover {
-    background: rgba(255, 255, 255, 0.02);
+    background: var(--row-hover);
 }
 
 .devices-table tr.row-issue {
@@ -609,7 +622,7 @@ body {
 .uptime-bar {
     width: 100%;
     height: 8px;
-    background: rgba(255, 255, 255, 0.05);
+    background: var(--track-bg);
     border-radius: 4px;
     overflow: hidden;
     margin-top: 12px;
@@ -634,8 +647,8 @@ body {
     margin-bottom: 16px;
     padding: 10px 14px;
     border-radius: 10px;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: var(--btn-surface);
+    border: 1px solid var(--btn-surface-border);
     color: var(--text);
     cursor: pointer;
     font-weight: 600;
