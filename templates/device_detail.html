@@ -82,6 +82,10 @@
                     <div class="meta-value">{{ device.device_type }}</div>
                 </div>
                 <div class="meta-item">
+                    <div class="meta-label">Site</div>
+                    <div class="meta-value">{{ device.site or 'Default Site' }}</div>
+                </div>
+                <div class="meta-item">
                     <div class="meta-label">Zone</div>
                     <div class="meta-value">{{ device.zone or 'No Zone' }}</div>
                 </div>
@@ -101,6 +105,18 @@
                 <div class="meta-item">
                     <div class="meta-label">Monitoring</div>
                     <div class="meta-value">{{ 'Active' if device.is_monitored else 'Paused' }}</div>
+                </div>
+                <div class="meta-item">
+                    <div class="meta-label">Profile</div>
+                    <div class="meta-value">{{ device.monitor_profile or 'ping' }}</div>
+                </div>
+                <div class="meta-item">
+                    <div class="meta-label">Antenna Thresholds</div>
+                    <div class="meta-value">
+                        {{ device.signal_threshold_dbm or -75 }} dBm /
+                        {{ device.link_quality_threshold or 50 }}/100 /
+                        {{ device.snr_threshold_db or 20 }} dB SNR
+                    </div>
                 </div>
             </div>
         </div>

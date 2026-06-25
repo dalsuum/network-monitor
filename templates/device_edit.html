@@ -50,19 +50,49 @@
                             <option value="router" {% if device.device_type == 'router' %}selected{% endif %}>Router</option>
                             <option value="switch" {% if device.device_type == 'switch' %}selected{% endif %}>Switch</option>
                             <option value="ap" {% if device.device_type == 'ap' %}selected{% endif %}>Access Point</option>
+                            <option value="outdoor_ap" {% if device.device_type == 'outdoor_ap' %}selected{% endif %}>Outdoor AP / Antenna</option>
                             <option value="server" {% if device.device_type == 'server' %}selected{% endif %}>Server</option>
                             <option value="other" {% if device.device_type == 'other' %}selected{% endif %}>Other</option>
                         </select>
                     </div>
                     <div class="form-field">
+                        <label for="site">Site</label>
+                        <input id="site" name="site" type="text" value="{{ device.site or 'Default Site' }}">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-field">
                         <label for="zone">Zone</label>
                         <input id="zone" name="zone" type="text" value="{{ device.zone }}">
+                    </div>
+                    <div class="form-field">
+                        <label for="monitor_profile">Monitor Profile</label>
+                        <select id="monitor_profile" name="monitor_profile">
+                            <option value="ping" {% if (device.monitor_profile or 'ping') == 'ping' %}selected{% endif %}>Ping Only</option>
+                            <option value="wireless_ap" {% if device.monitor_profile == 'wireless_ap' %}selected{% endif %}>Wireless AP</option>
+                        </select>
                     </div>
                 </div>
                 <div class="form-row full">
                     <div class="form-field">
                         <label for="location">Location</label>
                         <input id="location" name="location" type="text" value="{{ device.location }}">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-field">
+                        <label for="signal_threshold_dbm">Signal Minimum dBm</label>
+                        <input id="signal_threshold_dbm" name="signal_threshold_dbm" type="number" min="-100" max="-30" value="{{ device.signal_threshold_dbm or -75 }}">
+                    </div>
+                    <div class="form-field">
+                        <label for="link_quality_threshold">Link Quality Minimum</label>
+                        <input id="link_quality_threshold" name="link_quality_threshold" type="number" min="1" max="100" value="{{ device.link_quality_threshold or 50 }}">
+                    </div>
+                </div>
+                <div class="form-row full">
+                    <div class="form-field">
+                        <label for="snr_threshold_db">SNR Minimum dB</label>
+                        <input id="snr_threshold_db" name="snr_threshold_db" type="number" min="1" max="60" value="{{ device.snr_threshold_db or 20 }}">
                     </div>
                 </div>
                 <div class="form-row full">

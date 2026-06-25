@@ -105,6 +105,21 @@ PING_TIMEOUT=2
 
 For a quieter 24/7 machine, `PING_INTERVAL=30` is a good starting point.
 
+### Reusing the App for Multiple Locations
+
+Devices can now be grouped by **Site** and **Zone**. Use **Site** for the larger location, such as `Main Office`, `Warehouse`, or `Remote Tower`, and use **Zone** for the local area inside that site.
+
+For a new location:
+
+1. Start the app with that location's `.env` and database.
+2. Add each device from the dashboard.
+3. Set **Site** to the location name.
+4. Set **Zone** to the local area or link group.
+5. For WiFi antennas/APs, set **Type** to `Outdoor AP / Antenna` and **Profile** to `Wireless AP`.
+6. Tune the device thresholds from **Edit** after you see real signal values.
+
+You can use one app for several sites, or run one separate app per site. Separate apps are simpler when each location has its own technician, database, or network access path.
+
 ### History Retention
 
 History retention is automatic. Set this in `.env`:
@@ -194,6 +209,18 @@ AP wireless metrics are collected over SSH for AP-type devices when `AP_USERNAME
 Sig: -57 dBm | Link: 98/100
 ```
 
+For antenna devices, choose **Wireless AP** as the monitor profile. The app still pings the device, and the AP monitor also connects over SSH to collect wireless values.
+
+Default wireless alert thresholds can be set in `.env`:
+
+```env
+DEFAULT_SIGNAL_THRESHOLD_DBM=-75
+DEFAULT_LINK_QUALITY_THRESHOLD=50
+DEFAULT_SNR_THRESHOLD_DB=20
+```
+
+Each device can override these values from **Edit Device**. This is useful when a long-distance antenna link has different normal values than an indoor AP.
+
 ### Signal Strength (`dBm`)
 
 Signal is negative. Closer to zero is better.
@@ -241,16 +268,18 @@ signal -60 dBm, noise -95 dBm -> SNR 35 dB
 
 The **Simulator** page can work in two modes:
 
-- **Live AP data**: loads the latest AP `Signal` and `Link Quality` values from the monitoring database.
+- **Live AP data**: loads the latest AP `Mode`, `Rate`, `Signal`, `Noise`, and `Link Quality` values from the monitoring database when the AP exposes them.
 - **Manual mode**: lets you move the signal/noise sliders for RF what-if testing.
 
-Noise floor is still manual because the current AP parser stores signal and link quality, but not noise floor.
+If one side of a LigoWave link is in AP/Master mode and shows `Link: 10/100`, treat that as wireless link quality from that side, not Ethernet 10/100 speed. Compare it with the Station side, which is usually the better antenna-alignment reading.
+
+The automatic AP report logic ignores this Master-side low-link reading when the RF values are otherwise healthy, for example good signal, good SNR, and normal radio rate. It will still report true weak signal or poor-link cases when those supporting values are bad.
 
 1. Open **Simulator** from the navigation.
 2. Pick an AP from **Live AP Data** if wireless metrics are available.
-3. The signal slider updates from the database.
+3. The signal and noise sliders update from the database when those fields are available.
 4. Link quality becomes the live CCQ-style value.
-5. Adjust **Noise Floor** manually to understand SNR impact.
+5. Adjust **Noise Floor** manually only when the AP does not report it.
 6. Use **Load Station Profile** and **Load Master Profile** for manual examples.
 
 Use Dashboard, History, Device Detail, and Reports for audit records. Use Simulator to interpret live AP values and test wireless scenarios.
@@ -267,7 +296,9 @@ Use Dashboard, History, Device Detail, and Reports for audit records. Use Simula
 ### Database Schema
 
 **Device Table**
-- id, name, ip_address, device_type, location
+- id, name, ip_address, device_type, site, zone, location
+- monitor_profile, is_monitored
+- wireless_info, signal_threshold_dbm, link_quality_threshold, snr_threshold_db
 - last_status, latency, last_check
 - created_at
 

@@ -520,6 +520,19 @@ body {
     background: rgba(255, 255, 255, 0.02);
 }
 
+.devices-table tr.row-issue {
+    background: rgba(255, 51, 102, 0.07);
+    border-left: 3px solid var(--danger);
+}
+
+.devices-table tr.row-issue:hover {
+    background: rgba(255, 51, 102, 0.13);
+}
+
+.devices-table tr.row-issue td:first-child {
+    padding-left: 9px;
+}
+
 /* ---------- Device display helpers ---------- */
 .device-name {
     font-weight: 600;

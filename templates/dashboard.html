@@ -6,7 +6,7 @@
 <style>
     .add-form {
         display: none;
-        grid-template-columns: 2fr 2fr 1fr 1.5fr 1.5fr 0.8fr auto;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
         gap: 12px;
         padding: 20px;
         background: var(--surface);
@@ -60,23 +60,23 @@
     }
 
     .devices-table th:nth-child(1),
-    .devices-table td:nth-child(1) { width: 15%; }
+    .devices-table td:nth-child(1) { width: 14%; }
     .devices-table th:nth-child(2),
-    .devices-table td:nth-child(2) { width: 11%; }
+    .devices-table td:nth-child(2) { width: 10%; }
     .devices-table th:nth-child(3),
     .devices-table td:nth-child(3) { width: 7%; }
     .devices-table th:nth-child(4),
-    .devices-table td:nth-child(4) { width: 13%; }
+    .devices-table td:nth-child(4) { width: 12%; }
     .devices-table th:nth-child(5),
     .devices-table td:nth-child(5) { width: 9%; }
     .devices-table th:nth-child(6),
     .devices-table td:nth-child(6) { width: 7%; }
     .devices-table th:nth-child(7),
-    .devices-table td:nth-child(7) { width: 17%; }
+    .devices-table td:nth-child(7) { width: 14%; }
     .devices-table th:nth-child(8),
     .devices-table td:nth-child(8) { width: 9%; }
     .devices-table th:nth-child(9),
-    .devices-table td:nth-child(9) { width: 12%; }
+    .devices-table td:nth-child(9) { width: 18%; }
 
     .row-actions,
     .troubleshoot-actions {
@@ -120,13 +120,17 @@
         overflow-wrap: anywhere;
     }
 
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+
     @media (max-width: 1100px) {
         .zone-section {
             overflow-x: auto;
         }
 
         .devices-table {
-            min-width: 1050px;
+            min-width: 1120px;
             table-layout: auto;
         }
     }
@@ -171,9 +175,28 @@
             <div class="section-header">
                 <h2 class="section-title">Monitored Devices</h2>
                 <div style="display: flex; gap: 12px; align-items: center;">
-                    <button class="btn-refresh" onclick="location.reload()">ðŸ”„ Refresh</button>
+                    <button class="btn-refresh" onclick="location.reload()">Refresh</button>
                     <button class="btn-add" onclick="toggleAddForm()">+ Add Device</button>
-                    <a class="btn-refresh" href="{{ url_for('export_page') }}" style="margin-left:12px; display:inline-flex; align-items:center;">â¬‡ï¸ Export</a>
+                    <a class="btn-refresh" href="{{ url_for('export_page') }}" style="margin-left:12px; display:inline-flex; align-items:center;">Export</a>
+                </div>
+            </div>
+
+            <!-- Ping Modal -->
+            <div id="pingModal" style="display:none; pointer-events:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); align-items:center; justify-content:center; z-index:200;">
+                <div style="background:var(--surface); padding:28px 24px; border-radius:10px; width:360px; max-width:92%; box-shadow:0 8px 32px rgba(0,0,0,0.4);">
+                    <h3 style="margin:0 0 4px; font-family:'JetBrains Mono',monospace; font-size:16px;">Ping Check</h3>
+                    <div id="pingModalSub" style="font-size:13px; color:var(--text-dim); margin-bottom:18px;"></div>
+                    <div id="pingModalBody" style="min-height:60px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px;">
+                        <div id="pingSpinner" style="width:28px; height:28px; border:3px solid var(--border); border-top-color:var(--primary); border-radius:50%; animation:spin 0.8s linear infinite;"></div>
+                        <div id="pingSpinnerLabel" style="font-size:13px; color:var(--text-dim);">Pinging…</div>
+                    </div>
+                    <div id="pingResult" style="display:none; text-align:center; padding:14px 0 6px;">
+                        <div id="pingStatus" style="font-size:22px; font-weight:700; margin-bottom:6px;"></div>
+                        <div id="pingLatency" style="font-size:13px; color:var(--text-dim);"></div>
+                    </div>
+                    <div style="display:flex; justify-content:flex-end; margin-top:20px;">
+                        <button class="btn-refresh" onclick="closePingModal()">Close</button>
+                    </div>
                 </div>
             </div>
 
@@ -213,9 +236,19 @@
                         <option value="router">Router</option>
                         <option value="switch">Switch</option>
                         <option value="ap">Access Point</option>
+                        <option value="outdoor_ap">Outdoor AP / Antenna</option>
                         <option value="server">Server</option>
                         <option value="other">Other</option>
                     </select>
+                </div>
+                <div class="form-field">
+                    <label>Site</label>
+                    <input type="text" name="site" placeholder="e.g., Main Office" list="site-list">
+                    <datalist id="site-list">
+                        {% for site in all_sites %}
+                        <option value="{{ site }}">
+                        {% endfor %}
+                    </datalist>
                 </div>
                 <div class="form-field">
                     <label>Zone</label>
@@ -229,6 +262,25 @@
                 <div class="form-field">
                     <label>Location</label>
                     <input type="text" name="location" placeholder="e.g., Room A5">
+                </div>
+                <div class="form-field">
+                    <label>Profile</label>
+                    <select name="monitor_profile">
+                        <option value="ping">Ping Only</option>
+                        <option value="wireless_ap">Wireless AP</option>
+                    </select>
+                </div>
+                <div class="form-field">
+                    <label>Signal Min</label>
+                    <input type="number" name="signal_threshold_dbm" value="{{ default_signal_threshold_dbm }}" min="-100" max="-30">
+                </div>
+                <div class="form-field">
+                    <label>Link Min</label>
+                    <input type="number" name="link_quality_threshold" value="{{ default_link_quality_threshold }}" min="1" max="100">
+                </div>
+                <div class="form-field">
+                    <label>SNR Min</label>
+                    <input type="number" name="snr_threshold_db" value="{{ default_snr_threshold_db }}" min="1" max="60">
                 </div>
                 <div class="form-field">
                     <label>Monitor</label>
@@ -260,7 +312,7 @@
                         </thead>
                         <tbody>
                             {% for device in zone_devices %}
-                            <tr data-device-id="{{ device.id }}">
+                            <tr data-device-id="{{ device.id }}"{% if device.id in active_issue_ids %} class="row-issue"{% endif %}>
                                 <td>
                                     <a href="{{ url_for('device_detail', device_id=device.id) }}" style="text-decoration: none;">
                                         <div class="device-name">{{ device.name }}</div>
@@ -292,12 +344,12 @@
                                 <td>
                                     <div class="troubleshoot-actions">
                                     <a class="btn-refresh table-action" href="{{ url_for('device_detail', device_id=device.id) }}">Logs</a>
-                                    {% if device.device_type.lower() == 'server' %}
-                                    <a class="btn-refresh table-action" href="{{ url_for('ssh_device', device_id=device.id) }}">SSH</a>
-                                    {% else %}
-                                    <span class="ssh-disabled">SSH</span>
-                                    {% endif %}
-                                    <a class="btn-refresh table-action" href="{{ url_for('ping_device', device_id=device.id) }}">Ping</a>
+                                    <form method="POST" action="{{ url_for('ssh_device', device_id=device.id) }}">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button class="btn-refresh table-action" type="submit">SSH</button>
+                                    </form>
+                                    <a class="btn-refresh table-action" href="{{ url_for('https_device', device_id=device.id) }}" target="_blank" rel="noopener">URL Login</a>
+                                    <button class="btn-refresh table-action" onclick="openPingModal({{ device.id }}, '{{ device.name|e }}', '{{ device.ip_address|e }}')">Ping</button>
                                     </div>
                                 </td>
                             </tr>
@@ -308,7 +360,7 @@
                 {% endfor %}
             {% else %}
                 <div class="empty-state">
-                    <div class="empty-state-icon">ðŸ“¡</div>
+                    <div class="empty-state-icon"></div>
                     <p>No devices configured yet. Click "Add Device" to start monitoring.</p>
                 </div>
             {% endif %}
@@ -338,6 +390,55 @@
         function toggleAddForm() {
             const form = document.getElementById('addForm');
             form.classList.toggle('active');
+        }
+
+        // Ping modal
+        function openPingModal(deviceId, name, ip) {
+            const modal = document.getElementById('pingModal');
+            document.getElementById('pingModalSub').textContent = name + ' — ' + ip;
+            document.getElementById('pingSpinner').style.display = 'block';
+            document.getElementById('pingSpinnerLabel').style.display = 'block';
+            document.getElementById('pingResult').style.display = 'none';
+            modal.style.display = 'flex';
+            modal.style.pointerEvents = 'auto';
+
+            fetch(`/api/ping_device/${deviceId}`, { credentials: 'same-origin' })
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('pingSpinner').style.display = 'none';
+                    document.getElementById('pingSpinnerLabel').style.display = 'none';
+                    const statusEl = document.getElementById('pingStatus');
+                    const latencyEl = document.getElementById('pingLatency');
+                    if (data.success && data.status === 'Online') {
+                        statusEl.textContent = 'Online';
+                        statusEl.style.color = 'var(--success)';
+                        latencyEl.textContent = `Latency: ${Number(data.latency).toFixed(2)} ms`;
+                    } else if (data.success) {
+                        statusEl.textContent = 'Offline';
+                        statusEl.style.color = 'var(--danger)';
+                        latencyEl.textContent = 'Host unreachable or ICMP blocked';
+                    } else {
+                        statusEl.textContent = 'Error';
+                        statusEl.style.color = 'var(--danger)';
+                        latencyEl.textContent = data.error || 'Ping failed';
+                    }
+                    document.getElementById('pingResult').style.display = 'block';
+                })
+                .catch(err => {
+                    document.getElementById('pingSpinner').style.display = 'none';
+                    document.getElementById('pingSpinnerLabel').style.display = 'none';
+                    const statusEl = document.getElementById('pingStatus');
+                    statusEl.textContent = 'Error';
+                    statusEl.style.color = 'var(--danger)';
+                    document.getElementById('pingLatency').textContent = 'Request failed';
+                    document.getElementById('pingResult').style.display = 'block';
+                });
+        }
+
+        function closePingModal() {
+            const modal = document.getElementById('pingModal');
+            modal.style.display = 'none';
+            modal.style.pointerEvents = 'none';
         }
 
         // Export modal controls
@@ -371,6 +472,11 @@
                 if (latencyEl) latencyEl.textContent = (d.latency ? Number(d.latency).toFixed(2) : '0.00') + ' ms';
                 const wirelessEl = row.querySelector('.wireless-info');
                 if (wirelessEl && d.wireless_info) wirelessEl.textContent = d.wireless_info;
+                if (d.has_issue) {
+                    row.classList.add('row-issue');
+                } else {
+                    row.classList.remove('row-issue');
+                }
             }
         }
 
@@ -385,7 +491,7 @@
             }
         }
 
-        // A9: Fix stacking polling intervals â€” guard with a flag
+        // Fix stacking polling intervals by guarding with a flag
         document.addEventListener('DOMContentLoaded', function() {
             let socket = null;
             let pollingStarted = false;
@@ -418,11 +524,16 @@
 
             // Clicking outside modal closes it
             document.addEventListener('click', function(ev) {
-                const modal = document.getElementById('exportModal');
-                if (!modal || modal.style.display !== 'flex') return;
-                const box = modal.firstElementChild;
-                if (!box) return;
-                if (!box.contains(ev.target)) hideExportModal();
+                const exportModal = document.getElementById('exportModal');
+                if (exportModal && exportModal.style.display === 'flex') {
+                    const box = exportModal.firstElementChild;
+                    if (box && !box.contains(ev.target)) hideExportModal();
+                }
+                const pingModal = document.getElementById('pingModal');
+                if (pingModal && pingModal.style.display === 'flex') {
+                    const box = pingModal.firstElementChild;
+                    if (box && !box.contains(ev.target)) closePingModal();
+                }
             });
         });
     </script>

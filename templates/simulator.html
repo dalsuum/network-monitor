@@ -101,10 +101,18 @@
                     <option v-for="device in liveDevices" :key="device.id" :value="String(device.id)" v-text="device.name + ' - ' + device.wireless_info"></option>
                 </select>
 
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                <div class="grid grid-cols-1 sm:grid-cols-5 gap-3 text-xs">
                     <div class="bg-gray-800 rounded p-3 border border-gray-700">
                         <div class="text-gray-500 mb-1">Source</div>
                         <div class="font-semibold text-white" v-text="liveSourceLabel"></div>
+                    </div>
+                    <div class="bg-gray-800 rounded p-3 border border-gray-700">
+                        <div class="text-gray-500 mb-1">Mode</div>
+                        <div class="font-mono font-semibold text-gray-200" v-text="liveModeLabel"></div>
+                    </div>
+                    <div class="bg-gray-800 rounded p-3 border border-gray-700">
+                        <div class="text-gray-500 mb-1">Rate</div>
+                        <div class="font-mono font-semibold text-cyan-400" v-text="liveRateLabel"></div>
                     </div>
                     <div class="bg-gray-800 rounded p-3 border border-gray-700">
                         <div class="text-gray-500 mb-1">Live Signal</div>
@@ -115,6 +123,7 @@
                         <div class="font-mono font-semibold text-emerald-400" v-text="liveLinkLabel"></div>
                     </div>
                 </div>
+                <div v-if="masterLinkNote" class="mt-3 p-3 rounded bg-amber-950/50 border border-amber-700 text-xs text-amber-200" v-text="masterLinkNote"></div>
                 <p class="text-xs text-gray-500 mt-3" v-text="liveStatus"></p>
             </div>
             
@@ -212,6 +221,9 @@
             const selectedLiveLinkPercent = ref(null)
             const selectedLiveSignal = ref(null)
             const selectedLiveLinkText = ref('')
+            const selectedLiveMode = ref('')
+            const selectedLiveRate = ref('')
+            const selectedLiveNoise = ref(null)
             const liveStatus = ref('Live AP data has not been loaded yet.')
             let liveTimer = null
 
@@ -249,6 +261,26 @@
                 return selectedLiveLinkText.value || '-'
             })
 
+            const liveModeLabel = computed(() => {
+                return selectedLiveMode.value || '-'
+            })
+
+            const liveRateLabel = computed(() => {
+                return selectedLiveRate.value || '-'
+            })
+
+            const masterLinkNote = computed(() => {
+                if (
+                    mode.value === 'live' &&
+                    String(selectedLiveMode.value).toLowerCase() === 'master' &&
+                    selectedLiveLinkPercent.value !== null &&
+                    selectedLiveLinkPercent.value < 50
+                ) {
+                    return 'This is the AP/master side wireless Link Quality, not Ethernet 10/100 speed. Check the station side too; station-side values are usually the better antenna-alignment reading.'
+                }
+                return ''
+            })
+
             const snrColorClass = computed(() => {
                 if (snr.value > 30) return 'bg-green-500'
                 if (snr.value >= 20) return 'bg-yellow-500'
@@ -284,6 +316,9 @@
                 selectedLiveLinkPercent.value = null
                 selectedLiveSignal.value = null
                 selectedLiveLinkText.value = ''
+                selectedLiveMode.value = ''
+                selectedLiveRate.value = ''
+                selectedLiveNoise.value = null
                 signal.value = -50
                 noise.value = -95
             }
@@ -294,15 +329,24 @@
                 selectedLiveLinkPercent.value = null
                 selectedLiveSignal.value = null
                 selectedLiveLinkText.value = ''
+                selectedLiveMode.value = ''
+                selectedLiveRate.value = ''
+                selectedLiveNoise.value = null
                 signal.value = -60
                 noise.value = -95
             }
 
             const parseWirelessInfo = (info) => {
+                const modeMatch = String(info || '').match(/Mode:\s*([^|]+)/i)
+                const rateMatch = String(info || '').match(/Rate:\s*([^|]+)/i)
                 const signalMatch = String(info || '').match(/Sig:\s*(-?\d+)\s*dBm/i)
+                const noiseMatch = String(info || '').match(/Noise:\s*(-?\d+)\s*dBm/i)
                 const linkMatch = String(info || '').match(/Link:\s*(\d+)\s*\/\s*(\d+)/i)
                 const parsed = {
+                    mode: modeMatch ? modeMatch[1].trim() : '',
+                    rate: rateMatch ? rateMatch[1].trim() : '',
                     signal: signalMatch ? Number(signalMatch[1]) : null,
+                    noise: noiseMatch ? Number(noiseMatch[1]) : null,
                     linkText: linkMatch ? `${linkMatch[1]}/${linkMatch[2]}` : '',
                     linkPercent: null
                 }
@@ -322,6 +366,9 @@
                     selectedLiveLinkPercent.value = null
                     selectedLiveSignal.value = null
                     selectedLiveLinkText.value = ''
+                    selectedLiveMode.value = ''
+                    selectedLiveRate.value = ''
+                    selectedLiveNoise.value = null
                     liveStatus.value = liveDevices.value.length ? 'Manual mode selected.' : 'No AP wireless data is available yet.'
                     return
                 }
@@ -330,13 +377,19 @@
                 selectedLiveSignal.value = parsed.signal
                 selectedLiveLinkPercent.value = parsed.linkPercent
                 selectedLiveLinkText.value = parsed.linkText
+                selectedLiveMode.value = parsed.mode
+                selectedLiveRate.value = parsed.rate
+                selectedLiveNoise.value = parsed.noise
 
                 if (parsed.signal !== null) {
                     signal.value = parsed.signal
                 }
+                if (parsed.noise !== null) {
+                    noise.value = parsed.noise
+                }
 
                 liveStatus.value = parsed.signal !== null || parsed.linkPercent !== null
-                    ? `Loaded latest data from ${device.name}. Noise remains manual because it is not stored yet.`
+                    ? `Loaded latest data from ${device.name}.`
                     : `Selected ${device.name}, but no parseable wireless data was found.`
             }
 
@@ -347,6 +400,9 @@
                     selectedLiveLinkPercent.value = null
                     selectedLiveSignal.value = null
                     selectedLiveLinkText.value = ''
+                    selectedLiveMode.value = ''
+                    selectedLiveRate.value = ''
+                    selectedLiveNoise.value = null
                     liveStatus.value = 'Manual mode selected.'
                     return
                 }
@@ -427,7 +483,10 @@
                 applySelectedDevice,
                 liveSourceLabel,
                 liveSignalLabel,
-                liveLinkLabel
+                liveLinkLabel,
+                liveModeLabel,
+                liveRateLabel,
+                masterLinkNote
             }
         }
     }).mount('#app')

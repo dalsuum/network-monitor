@@ -6,6 +6,8 @@ import time
 import click
 import logging
 import secrets
+import shutil
+import subprocess
 import threading
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -24,6 +26,7 @@ from flask_login import (
 from flask_socketio import SocketIO
 from icmplib import multiping
 from openpyxl import Workbook
+from sqlalchemy import or_
 from werkzeug.security import generate_password_hash, check_password_hash
 
 # ==================== CONFIGURATION ====================
@@ -93,8 +96,12 @@ def format_dt(dt, fmt='%Y-%m-%d %H:%M:%S'):
 # Register Jinja filter
 app.jinja_env.filters['format_dt'] = format_dt
 
-# Regex for valid SSH usernames: alphanumeric, dots, hyphens, underscores
-_SSH_USER_RE = re.compile(r'^[a-zA-Z0-9._-]+$')
+PUTTY_CANDIDATES = (
+    os.environ.get('PUTTY_PATH'),
+    os.path.join(os.path.dirname(__file__), 'tools', 'putty.exe'),
+    r'C:\Program Files\PuTTY\putty.exe',
+    r'C:\Program Files (x86)\PuTTY\putty.exe',
+)
 
 # Regex for valid IPv4
 _IPV4_RE = re.compile(
@@ -108,6 +115,66 @@ def validate_ipv4(ip_address):
     if not m:
         return False
     return all(0 <= int(octet) <= 255 for octet in m.groups())
+
+
+def find_putty_executable():
+    """Find PuTTY from env, bundled tools folder, PATH, or standard install paths."""
+    path_putty = shutil.which('putty')
+    if path_putty:
+        return path_putty
+    for candidate in PUTTY_CANDIDATES:
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def launch_ssh_terminal(ip_address):
+    """Open an interactive SSH terminal on the machine running this Flask app."""
+    putty_path = find_putty_executable()
+    if putty_path:
+        subprocess.Popen([putty_path, '-ssh', ip_address, '-P', '22'])
+        return 'PuTTY'
+
+    ssh_path = shutil.which('ssh')
+    if ssh_path and os.name == 'nt':
+        cmd = f'set /p SSHUSER=SSH user: && "{ssh_path}" !SSHUSER!@{ip_address}'
+        subprocess.Popen(
+            ['cmd.exe', '/v:on', '/k', cmd],
+            creationflags=getattr(subprocess, 'CREATE_NEW_CONSOLE', 0),
+        )
+        return 'Windows SSH'
+
+    if ssh_path:
+        subprocess.Popen([ssh_path, ip_address])
+        return 'SSH'
+
+    return None
+
+
+def parse_int_field(value, default, minimum=None, maximum=None):
+    """Parse an optional integer form value with bounds and a safe default."""
+    if value in (None, ''):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    if minimum is not None:
+        parsed = max(minimum, parsed)
+    if maximum is not None:
+        parsed = min(maximum, parsed)
+    return parsed
+
+
+DEFAULT_SIGNAL_THRESHOLD_DBM = parse_int_field(
+    os.environ.get('DEFAULT_SIGNAL_THRESHOLD_DBM'), -75, -100, -30
+)
+DEFAULT_LINK_QUALITY_THRESHOLD = parse_int_field(
+    os.environ.get('DEFAULT_LINK_QUALITY_THRESHOLD'), 50, 1, 100
+)
+DEFAULT_SNR_THRESHOLD_DB = parse_int_field(
+    os.environ.get('DEFAULT_SNR_THRESHOLD_DB'), 20, 1, 60
+)
 
 
 def is_safe_redirect_url(target):
@@ -151,12 +218,17 @@ class Device(db.Model):
     name = db.Column(db.String(50), nullable=False)
     ip_address = db.Column(db.String(50), unique=True, nullable=False)
     device_type = db.Column(db.String(20), default="other")
+    site = db.Column(db.String(80), default="Default Site")
     location = db.Column(db.String(100), default="")
     zone = db.Column(db.String(50), default="")
+    monitor_profile = db.Column(db.String(30), default="ping")
     last_status = db.Column(db.String(20), default="Unknown")
     latency = db.Column(db.Float, default=0.0)
     is_monitored = db.Column(db.Boolean, default=True, nullable=False)
     wireless_info = db.Column(db.String(100), default="")
+    signal_threshold_dbm = db.Column(db.Integer, default=DEFAULT_SIGNAL_THRESHOLD_DBM)
+    link_quality_threshold = db.Column(db.Integer, default=DEFAULT_LINK_QUALITY_THRESHOLD)
+    snr_threshold_db = db.Column(db.Integer, default=DEFAULT_SNR_THRESHOLD_DB)
     last_check = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -280,7 +352,7 @@ def logout():
 @app.route('/')
 @login_required
 def dashboard():
-    devices = Device.query.order_by(Device.zone, Device.name).all()
+    devices = Device.query.order_by(Device.site, Device.zone, Device.name).all()
 
     total_devices = len(devices)
     online_devices = sum(1 for d in devices if d.last_status == "Online")
@@ -295,14 +367,29 @@ def dashboard():
         DeviceHistory.timestamp >= last_24h_naive
     ).order_by(DeviceHistory.timestamp.desc()).limit(10).all()
 
-    # Group devices by zone
+    # Active issue device IDs: Offline OR recent AP threshold violation (last 30 min)
+    last_30m_naive = (datetime.now(timezone.utc) - timedelta(minutes=30)).replace(tzinfo=None)
+    recent_incident_device_ids = set(
+        r.device_id for r in IncidentReport.query.filter(
+            IncidentReport.timestamp >= last_30m_naive
+        ).with_entities(IncidentReport.device_id).all()
+    )
+    active_issue_ids = {
+        d.id for d in devices
+        if d.last_status == "Offline" or d.id in recent_incident_device_ids
+    }
+
+    # Group devices by site and zone so the same deployment can cover locations.
     zones = {}
     for device in devices:
+        site_name = device.site if device.site else "Default Site"
         zone_name = device.zone if device.zone else "No Zone"
-        if zone_name not in zones:
-            zones[zone_name] = []
-        zones[zone_name].append(device)
+        group_name = f"{site_name} / {zone_name}"
+        if group_name not in zones:
+            zones[group_name] = []
+        zones[group_name].append(device)
 
+    all_sites = sorted(set((d.site or "Default Site") for d in devices))
     all_zones = sorted(set(d.zone for d in devices if d.zone))
 
     stats = {
@@ -319,9 +406,14 @@ def dashboard():
         'dashboard.html',
         devices=devices,
         zones=zones,
+        all_sites=all_sites,
         all_zones=all_zones,
         stats=stats,
         recent_incidents=recent_incidents,
+        active_issue_ids=active_issue_ids,
+        default_signal_threshold_dbm=DEFAULT_SIGNAL_THRESHOLD_DBM,
+        default_link_quality_threshold=DEFAULT_LINK_QUALITY_THRESHOLD,
+        default_snr_threshold_db=DEFAULT_SNR_THRESHOLD_DB,
     )
 
 
@@ -332,8 +424,19 @@ def add_device():
         name = request.form.get('name', '').strip()
         ip_address = request.form.get('ip', '').strip()
         device_type = request.form.get('device_type', 'other')
+        site = request.form.get('site', '').strip() or 'Default Site'
         location = request.form.get('location', '').strip()
         zone = request.form.get('zone', '').strip()
+        monitor_profile = request.form.get('monitor_profile', '').strip() or 'ping'
+        signal_threshold_dbm = parse_int_field(
+            request.form.get('signal_threshold_dbm'), DEFAULT_SIGNAL_THRESHOLD_DBM, -100, -30
+        )
+        link_quality_threshold = parse_int_field(
+            request.form.get('link_quality_threshold'), DEFAULT_LINK_QUALITY_THRESHOLD, 1, 100
+        )
+        snr_threshold_db = parse_int_field(
+            request.form.get('snr_threshold_db'), DEFAULT_SNR_THRESHOLD_DB, 1, 60
+        )
 
         if not name:
             flash('Device name is required', 'error')
@@ -357,8 +460,13 @@ def add_device():
             name=name,
             ip_address=ip_address,
             device_type=device_type,
+            site=site,
             location=location,
             zone=zone,
+            monitor_profile=monitor_profile,
+            signal_threshold_dbm=signal_threshold_dbm,
+            link_quality_threshold=link_quality_threshold,
+            snr_threshold_db=snr_threshold_db,
             is_monitored=request.form.get('is_monitored', 'on') == 'on',
         )
 
@@ -366,7 +474,7 @@ def add_device():
         db.session.commit()
 
         flash(
-            f'Device "{name}" added successfully to {zone if zone else "No Zone"}',
+            f'Device "{name}" added successfully to {site} / {zone if zone else "No Zone"}',
             'success',
         )
 
@@ -395,8 +503,19 @@ def edit_device(device_id):
         name = request.form.get('name', '').strip()
         ip_address = request.form.get('ip', '').strip()
         device_type = request.form.get('device_type', 'other')
+        site = request.form.get('site', '').strip() or 'Default Site'
         location = request.form.get('location', '').strip()
         zone = request.form.get('zone', '').strip()
+        monitor_profile = request.form.get('monitor_profile', '').strip() or 'ping'
+        signal_threshold_dbm = parse_int_field(
+            request.form.get('signal_threshold_dbm'), DEFAULT_SIGNAL_THRESHOLD_DBM, -100, -30
+        )
+        link_quality_threshold = parse_int_field(
+            request.form.get('link_quality_threshold'), DEFAULT_LINK_QUALITY_THRESHOLD, 1, 100
+        )
+        snr_threshold_db = parse_int_field(
+            request.form.get('snr_threshold_db'), DEFAULT_SNR_THRESHOLD_DB, 1, 60
+        )
 
         if not name:
             flash('Device name is required', 'error')
@@ -421,8 +540,13 @@ def edit_device(device_id):
         device.name = name
         device.ip_address = ip_address
         device.device_type = device_type
+        device.site = site
         device.location = location
         device.zone = zone
+        device.monitor_profile = monitor_profile
+        device.signal_threshold_dbm = signal_threshold_dbm
+        device.link_quality_threshold = link_quality_threshold
+        device.snr_threshold_db = snr_threshold_db
         device.is_monitored = request.form.get('is_monitored') == 'on'
         db.session.commit()
         flash(f'Device {device.name} updated successfully', 'success')
@@ -451,28 +575,47 @@ def ping_device(device_id):
     return redirect(url_for('dashboard'))
 
 
-@app.route('/ssh_device/<int:device_id>')
+@app.route('/api/ping_device/<int:device_id>')
+@login_required
+def api_ping_device(device_id):
+    device = Device.query.get_or_404(device_id)
+    try:
+        result = poll_device(device)
+        db.session.commit()
+        emit_status_update([device], datetime.now(timezone.utc))
+        return jsonify({
+            'success': True,
+            'status': result['status'],
+            'latency': result['latency'],
+            'ip': device.ip_address,
+            'name': device.name,
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e), 'ip': device.ip_address, 'name': device.name}), 500
+
+
+@app.route('/ssh_device/<int:device_id>', methods=['GET', 'POST'])
 @login_required
 def ssh_device(device_id):
     device = Device.query.get_or_404(device_id)
-    if device.device_type.lower() != 'server':
-        flash('SSH login is only available for SSH-capable hosts.', 'error')
-        return redirect(url_for('dashboard'))
-
+    launcher = launch_ssh_terminal(device.ip_address)
+    if launcher:
+        flash(f'Opened {launcher} for SSH to {device.ip_address}.', 'success')
+    else:
+        flash(
+            'No SSH terminal found. Install PuTTY, set PUTTY_PATH, place putty.exe in tools, '
+            'or enable the Windows OpenSSH Client.',
+            'error',
+        )
+    return redirect(url_for('dashboard'))
     # S4: Sanitize SSH user — strip anything except [a-zA-Z0-9._-]
-    ssh_user = request.args.get('user', 'admin')
-    if not _SSH_USER_RE.match(ssh_user):
-        ssh_user = 'admin'
 
-    ssh_command = f'ssh {ssh_user}@{device.ip_address}'
-    ssh_url = f'ssh://{ssh_user}@{device.ip_address}:22/'
-    return render_template(
-        'ssh_launch.html',
-        device=device,
-        ssh_user=ssh_user,
-        ssh_command=ssh_command,
-        ssh_url=ssh_url,
-    )
+
+@app.route('/https_device/<int:device_id>')
+@login_required
+def https_device(device_id):
+    device = Device.query.get_or_404(device_id)
+    return redirect(f'https://{device.ip_address}', code=302)
 
 
 @app.route('/device/<int:device_id>')
@@ -549,17 +692,26 @@ def simulator():
 def api_status():
     """API endpoint for real-time status updates."""
     devices = Device.query.all()
+    last_30m_naive = (datetime.now(timezone.utc) - timedelta(minutes=30)).replace(tzinfo=None)
+    incident_ids = set(
+        r.device_id for r in IncidentReport.query.filter(
+            IncidentReport.timestamp >= last_30m_naive
+        ).with_entities(IncidentReport.device_id).all()
+    )
     return jsonify({
         'devices': [{
             'id': d.id,
             'name': d.name,
             'ip_address': d.ip_address,
             'device_type': d.device_type,
+            'site': getattr(d, 'site', 'Default Site'),
             'status': d.last_status,
             'latency': d.latency,
             'is_monitored': d.is_monitored,
+            'monitor_profile': getattr(d, 'monitor_profile', 'ping'),
             'wireless_info': getattr(d, 'wireless_info', ''),
             'last_check': to_iso_with_tz(d.last_check) if d.last_check else None,
+            'has_issue': d.last_status == 'Offline' or d.id in incident_ids,
         } for d in devices],
         'timestamp': to_iso_with_tz(datetime.now(timezone.utc)),
     })
@@ -606,17 +758,22 @@ def export_report(what, fmt):
         abort(404)
 
     if what == 'devices':
-        devices = Device.query.order_by(Device.zone, Device.name).all()
+        devices = Device.query.order_by(Device.site, Device.zone, Device.name).all()
         rows = [{
             'id': d.id,
             'name': d.name,
             'ip_address': d.ip_address,
             'type': d.device_type,
+            'site': getattr(d, 'site', 'Default Site'),
             'zone': d.zone,
             'location': d.location,
+            'monitor_profile': getattr(d, 'monitor_profile', 'ping'),
             'status': d.last_status,
             'latency': d.latency,
             'wireless': getattr(d, 'wireless_info', ''),
+            'signal_threshold_dbm': getattr(d, 'signal_threshold_dbm', -75),
+            'link_quality_threshold': getattr(d, 'link_quality_threshold', 50),
+            'snr_threshold_db': getattr(d, 'snr_threshold_db', 20),
             'last_check': to_iso_with_tz(d.last_check) if d.last_check else '',
         } for d in devices]
         filename_base = 'devices_report'
@@ -887,9 +1044,11 @@ def emit_status_update(devices, now_utc):
             'name': d.name,
             'ip_address': d.ip_address,
             'device_type': d.device_type,
+            'site': getattr(d, 'site', 'Default Site'),
             'status': d.last_status,
             'latency': d.latency,
             'is_monitored': d.is_monitored,
+            'monitor_profile': getattr(d, 'monitor_profile', 'ping'),
             'wireless_info': getattr(d, 'wireless_info', ''),
             'last_check': to_iso_with_tz(d.last_check) if d.last_check else None,
         } for d in devices],
@@ -914,8 +1073,13 @@ def start_ap_monitoring():
     while monitoring_active:
         try:
             with app.app_context():
-                # Get devices of type 'ap' or 'outdoor_ap'
-                devices = Device.query.filter(Device.device_type.in_(['ap', 'outdoor_ap'])).all()
+                devices = Device.query.filter(
+                    Device.is_monitored.is_(True),
+                    or_(
+                        Device.monitor_profile == 'wireless_ap',
+                        Device.device_type.in_(['ap', 'outdoor_ap']),
+                    ),
+                ).all()
                 
                 for device in devices:
                     if not monitoring_active:
@@ -944,11 +1108,20 @@ def start_ap_monitoring():
                             logger.info(f'Successfully logged AP metrics for {device.name}')
                             
                             import re
+                            mode_match = re.search(r'Mode:([A-Za-z]+)', out_combined)
+                            rate_match = re.search(r'Bit Rate=([\d.]+\s*[A-Za-z/]+)', out_combined)
                             signal_match = re.search(r'Signal level[:=]\s*(-\d+\s*dBm)', out_combined)
+                            noise_match = re.search(r'Noise level[:=]\s*(-\d+\s*dBm)', out_combined)
                             link_match = re.search(r'Link Quality=([\d/]+)', out_combined)
                             info_parts = []
+                            if mode_match:
+                                info_parts.append(f"Mode: {mode_match.group(1)}")
+                            if rate_match:
+                                info_parts.append(f"Rate: {rate_match.group(1)}")
                             if signal_match:
                                 info_parts.append(f"Sig: {signal_match.group(1)}")
+                            if noise_match:
+                                info_parts.append(f"Noise: {noise_match.group(1)}")
                             if link_match:
                                 info_parts.append(f"Link: {link_match.group(1)}")
                             if info_parts:
@@ -958,15 +1131,49 @@ def start_ap_monitoring():
                                 # Anomaly Detection
                                 issue_found = None
                                 details = None
+                                mode_val = mode_match.group(1).strip().lower() if mode_match else ''
+                                sig_val = None
+                                noise_val = None
+                                rate_val = None
+                                signal_threshold = device.signal_threshold_dbm or DEFAULT_SIGNAL_THRESHOLD_DBM
+                                link_threshold = device.link_quality_threshold or DEFAULT_LINK_QUALITY_THRESHOLD
+                                snr_threshold = device.snr_threshold_db or DEFAULT_SNR_THRESHOLD_DB
+
+                                if rate_match:
+                                    rate_number = re.search(r'[\d.]+', rate_match.group(1))
+                                    if rate_number:
+                                        try:
+                                            rate_val = float(rate_number.group(0))
+                                        except ValueError:
+                                            rate_val = None
+
+                                if noise_match:
+                                    try:
+                                        noise_val = int(noise_match.group(1).replace('dBm', '').strip())
+                                    except ValueError:
+                                        noise_val = None
                                 
                                 if signal_match:
                                     try:
                                         sig_val = int(signal_match.group(1).replace('dBm', '').strip())
-                                        if sig_val < -75:
+                                        if sig_val < signal_threshold:
                                             issue_found = "Low Signal"
-                                            details = f"Signal dropped to {sig_val} dBm"
-                                    except:
+                                            details = (
+                                                f"Signal dropped to {sig_val} dBm "
+                                                f"(threshold {signal_threshold} dBm)"
+                                            )
+                                    except ValueError:
                                         pass
+
+                                snr_val = (
+                                    sig_val - noise_val
+                                    if sig_val is not None and noise_val is not None
+                                    else None
+                                )
+
+                                if snr_val is not None and snr_val < snr_threshold and not issue_found:
+                                    issue_found = "Low SNR"
+                                    details = f"SNR dropped to {snr_val} dB (threshold {snr_threshold} dB)"
                                 
                                 if link_match and not issue_found:
                                     link_str = link_match.group(1)
@@ -974,10 +1181,27 @@ def start_ap_monitoring():
                                         try:
                                             num, den = link_str.split('/')
                                             link_pct = (int(num) / int(den)) * 100
-                                            if link_pct < 50:
-                                                issue_found = "Poor Link Quality"
-                                                details = f"Link Quality dropped to {link_str}"
-                                        except:
+                                            if link_pct < link_threshold:
+                                                master_with_good_rf = (
+                                                    mode_val == 'master'
+                                                    and sig_val is not None and sig_val >= -70
+                                                    and snr_val is not None and snr_val >= 25
+                                                    and (rate_val is None or rate_val >= 100)
+                                                )
+                                                if master_with_good_rf:
+                                                    logger.info(
+                                                        f"Ignoring master-side Link Quality {link_str} for "
+                                                        f"{device.name}; RF is healthy "
+                                                        f"(signal {sig_val} dBm, noise {noise_val} dBm, "
+                                                        f"SNR {snr_val} dB, rate {rate_val or 'unknown'} Mb/s)."
+                                                    )
+                                                else:
+                                                    issue_found = "Poor Link Quality"
+                                                    details = (
+                                                        f"Link Quality dropped to {link_str} "
+                                                        f"(threshold {link_threshold}/100)"
+                                                    )
+                                        except (ValueError, ZeroDivisionError):
                                             pass
                                             
                                 if issue_found:
@@ -1079,13 +1303,11 @@ def start_monitoring():
 # ==================== ADMIN ROUTES ====================
 
 def create_default_user():
-    """Create or update default admin user based on ADMIN_PASSWORD env var."""
+    """Create default admin user on first run. ADMIN_PASSWORD is only used at creation time."""
     with app.app_context():
-        admin_pw = os.environ.get('ADMIN_PASSWORD')
         admin_user = User.query.filter_by(username='admin').first()
         if not admin_user:
-            if not admin_pw:
-                admin_pw = secrets.token_urlsafe(16)
+            admin_pw = os.environ.get('ADMIN_PASSWORD') or secrets.token_urlsafe(16)
             hashed = generate_password_hash(admin_pw)
             new_user = User(
                 username='admin', password=hashed,
@@ -1095,14 +1317,7 @@ def create_default_user():
             db.session.commit()
             logger.info('Default admin user created.')
             print('[OK] Default user created (username: admin).')
-            # Print the password once so operator can record it
             print(f'  Admin password: {admin_pw}')
-        else:
-            if admin_pw:
-                admin_user.password = generate_password_hash(admin_pw)
-                db.session.commit()
-                logger.info('Existing admin password updated from ADMIN_PASSWORD env var.')
-                print('[OK] Admin password updated from environment.')
 
 
 def ensure_database_schema():
@@ -1116,10 +1331,26 @@ def ensure_database_schema():
 
     columns = {column['name'] for column in inspector.get_columns('device')}
     with db.engine.begin() as conn:
+        if 'site' not in columns:
+            conn.exec_driver_sql("ALTER TABLE device ADD COLUMN site VARCHAR(80) DEFAULT 'Default Site'")
         if 'zone' not in columns:
             conn.exec_driver_sql("ALTER TABLE device ADD COLUMN zone VARCHAR(50) DEFAULT ''")
+        if 'monitor_profile' not in columns:
+            conn.exec_driver_sql("ALTER TABLE device ADD COLUMN monitor_profile VARCHAR(30) DEFAULT 'ping'")
         if 'wireless_info' not in columns:
             conn.exec_driver_sql("ALTER TABLE device ADD COLUMN wireless_info VARCHAR(100) DEFAULT ''")
+        if 'signal_threshold_dbm' not in columns:
+            conn.exec_driver_sql(
+                f"ALTER TABLE device ADD COLUMN signal_threshold_dbm INTEGER DEFAULT {DEFAULT_SIGNAL_THRESHOLD_DBM}"
+            )
+        if 'link_quality_threshold' not in columns:
+            conn.exec_driver_sql(
+                f"ALTER TABLE device ADD COLUMN link_quality_threshold INTEGER DEFAULT {DEFAULT_LINK_QUALITY_THRESHOLD}"
+            )
+        if 'snr_threshold_db' not in columns:
+            conn.exec_driver_sql(
+                f"ALTER TABLE device ADD COLUMN snr_threshold_db INTEGER DEFAULT {DEFAULT_SNR_THRESHOLD_DB}"
+            )
         if 'is_monitored' not in columns:
             conn.exec_driver_sql("ALTER TABLE device ADD COLUMN is_monitored BOOLEAN DEFAULT 1 NOT NULL")
 
@@ -1132,7 +1363,7 @@ def poll_devices_command(include_paused):
     query = Device.query
     if not include_paused:
         query = query.filter_by(is_monitored=True)
-    devices = query.order_by(Device.zone, Device.name).all()
+    devices = query.order_by(Device.site, Device.zone, Device.name).all()
 
     if not devices:
         click.echo('No devices to poll.')
